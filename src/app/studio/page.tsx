@@ -1,0 +1,1077 @@
+"use client";
+
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Wand2, Play, Sparkles, Video, Pause, AlertCircle, Download, Loader2, Edit3, ChevronRight, CheckCircle2, Image as ImageIcon, Globe, Mail, Link, XCircle, MessageSquare, Mic, Scissors, Zap, Music, Smartphone, Settings, PenTool, Volume2, Type, FileText } from 'lucide-react';
+
+import Nav from '../../components/Nav';
+
+interface Scene {
+  imagePrompt: string;
+  dialogue: string;
+  imageUrl?: string;
+  audioUrl?: string;
+  isThumbnail?: boolean;
+}
+
+const VISUAL_STYLES = [
+  "Pixar 3D Cartoon",
+  "Japanese Anime",
+  "Cinematic Realistic",
+  "Watercolor Sketch",
+  "Cyberpunk Neon",
+  "Dark Fantasy"
+];
+
+const BGM_TRACKS = [
+  { name: "None", url: "" },
+  { name: "Epic Cinematic", url: "https://cdn.pixabay.com/audio/2022/01/18/audio_d0a13f69d2.mp3" },
+  { name: "Dark Mystery", url: "https://cdn.pixabay.com/audio/2022/03/15/audio_c8b8175b9f.mp3" },
+  { name: "Lofi Chill", url: "https://cdn.pixabay.com/audio/2022/05/27/audio_1808fbf589.mp3" }
+];
+
+const LANGUAGES = ["Hindi", "English", "Spanish", "German"];
+
+export default function Home() {
+  const [storyTitle, setStoryTitle] = useState('जादुई चप्पल');
+  const [storyPart, setStoryPart] = useState('Part 1');
+  const [script, setScript] = useState('एक छोटे से गाँव में मोहन नाम का एक गरीब लड़का रहता था। वह अपनी बूढ़ी माँ के साथ एक टूटी-फूटी झोपड़ी में रहता था...');
+  const [visualStyle, setVisualStyle] = useState(VISUAL_STYLES[0]);
+  const [bgmTrack, setBgmTrack] = useState(BGM_TRACKS[0].url);
+  const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
+  const [targetLanguage, setTargetLanguage] = useState(LANGUAGES[0]);
+  const [idea, setIdea] = useState('');
+  const [isBrainstorming, setIsBrainstorming] = useState(false);
+  const [activeTab, setActiveTab] = useState<'script' | 'settings'>('script');
+  
+  const [bgmVolume, setBgmVolume] = useState(15);
+  const [voiceVolume, setVoiceVolume] = useState(100);
+  const [subtitleStyle, setSubtitleStyle] = useState<'viral' | 'cinematic' | 'none'>('viral');
+  
+  const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false);
+  const [isStoryboardMode, setIsStoryboardMode] = useState(false);
+  const [storyboardScenes, setStoryboardScenes] = useState<Scene[]>([]);
+
+  const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
+  const [status, setStatus] = useState('Idle');
+  const [progress, setProgress] = useState(0);
+
+  const [scenes, setScenes] = useState<Scene[]>([]);
+  const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const bgmAudioRef = useRef<HTMLAudioElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [sceneStartTime, setSceneStartTime] = useState<number>(0);
+  const [activeCaptionChunk, setActiveCaptionChunk] = useState<string>('');
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isPlaying && scenes[currentSceneIdx] && !scenes[currentSceneIdx].isThumbnail) {
+      interval = setInterval(() => {
+         const scene = scenes[currentSceneIdx];
+         const durationMs = (audioRef.current && audioRef.current.duration) ? audioRef.current.duration * 1000 : 3000;
+         const elapsed = Date.now() - sceneStartTime;
+         const words = scene.dialogue.split(' ');
+         
+         // Safe active word index
+         let activeWordIndex = Math.floor((elapsed / durationMs) * words.length);
+         if (isNaN(activeWordIndex) || activeWordIndex < 0) activeWordIndex = 0;
+         if (activeWordIndex >= words.length) activeWordIndex = words.length - 1;
+         
+         const wordsPerChunk = 2; // 2 words at a time
+         const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
+         const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
+         setActiveCaptionChunk(chunk);
+      }, 100);
+    } else {
+      setActiveCaptionChunk('');
+    }
+    return () => clearInterval(interval);
+  }, [isPlaying, currentSceneIdx, sceneStartTime, scenes]);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleBrainstorm = async () => {
+    if (!idea) return;
+    setIsBrainstorming(true);
+    showToast("Brainstorming a viral script...");
+    try {
+      const res = await fetch('/api/brainstorm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idea })
+      });
+      const data = await res.json();
+      if (res.ok && data.script) {
+         setScript(data.script);
+         showToast("Script generated! You can edit it below.");
+      } else {
+         throw new Error(data.error || 'Failed to brainstorm');
+      }
+    } catch (e: any) {
+      console.error(e);
+      showToast("Error generating script: " + e.message);
+    } finally {
+      setIsBrainstorming(false);
+    }
+  };
+
+  const handleGenerateStoryboard = async () => {
+    if (!script.trim()) return;
+    setIsGeneratingStoryboard(true);
+    setError(null);
+    setStoryboardScenes([]);
+    setIsStoryboardMode(false);
+    
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        body: JSON.stringify({ script, targetLanguage }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.error || 'Failed to generate scenes');
+      
+      const thumbnailScene: Scene = {
+        isThumbnail: true,
+        imagePrompt: `A highly detailed cinematic movie poster background without text. Show the main subject doing an action based on this story: ${script.slice(0, 150)}...`,
+        dialogue: `${storyTitle}, ${storyPart}`
+      };
+      
+      setStoryboardScenes([thumbnailScene, ...data.scenes]);
+      setIsStoryboardMode(true);
+      showToast("Storyboard Generated! Review and Edit.");
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message);
+    } finally {
+      setIsGeneratingStoryboard(false);
+    }
+  };
+
+  const updateScene = (index: number, field: 'imagePrompt' | 'dialogue', value: string) => {
+    const newScenes = [...storyboardScenes];
+    newScenes[index][field] = value;
+    setStoryboardScenes(newScenes);
+  };
+
+  const handleGenerateVideo = async () => {
+    if (storyboardScenes.length === 0) return;
+    setIsGeneratingVideo(true);
+    setError(null);
+    setScenes([]);
+    setIsStoryboardMode(false);
+    
+    try {
+      setStatus('Generating Assets...');
+      setProgress(0);
+      
+      const scenesWithAssets = [];
+      const totalScenes = storyboardScenes.length;
+      let completed = 0;
+
+      // Process sequentially (1 by 1) instead of batching to avoid Pollinations 429 Rate Limit
+      for (let i = 0; i < totalScenes; i++) {
+          const scene = storyboardScenes[i];
+          
+          let imageUrl: string | undefined = undefined;
+          let audioUrl: string | undefined = undefined;
+          
+          const [imgRes, audioRes] = await Promise.all([
+              fetch('/api/image', {
+                  method: 'POST',
+                  body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio }),
+                  headers: { 'Content-Type': 'application/json' }
+              }).catch(e => ({ ok: false, statusText: e.message, blob: async () => null })),
+              fetch('/api/tts', {
+                  method: 'POST',
+                  body: JSON.stringify({ text: scene.dialogue }),
+                  headers: { 'Content-Type': 'application/json' }
+              }).catch(e => ({ ok: false, json: async () => ({}) }))
+          ]);
+
+          if (imgRes.ok) {
+             const blob = await (imgRes as any).blob();
+             if (blob) imageUrl = URL.createObjectURL(blob);
+          }
+          if (audioRes.ok) {
+             const audioData = await (audioRes as any).json();
+             if (audioData.audioUrl) audioUrl = audioData.audioUrl;
+          }
+
+          scenesWithAssets.push({ ...scene, imageUrl, audioUrl });
+          
+          completed += 1;
+          let currentProgress = Math.round((completed / totalScenes) * 100);
+          setProgress(currentProgress);
+          setStatus(`Generating Scene ${completed} of ${totalScenes} (${currentProgress}%)`);
+          
+          if (completed < totalScenes) {
+              // Wait 1.5 seconds before asking for the next image to prevent Rate Limiting
+              await new Promise(resolve => setTimeout(resolve, 1500));
+          }
+      }
+      
+      setProgress(100);
+      setStatus('Finalizing Video...');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      setScenes(scenesWithAssets);
+      setStatus('Ready');
+      setCurrentSceneIdx(0);
+      showToast("Video Generation Complete!");
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message);
+      setStatus('Error');
+    } finally {
+      setIsGeneratingVideo(false);
+    }
+  };
+
+  const handlePlay = () => {
+    if (scenes.length === 0) return;
+    if (isPlaying) {
+      if (audioRef.current) audioRef.current.pause();
+      if (bgmAudioRef.current) bgmAudioRef.current.pause();
+      setIsPlaying(false);
+      return;
+    }
+    setIsPlaying(true);
+    if (bgmTrack && bgmAudioRef.current) {
+        bgmAudioRef.current.src = bgmTrack;
+        bgmAudioRef.current.volume = bgmVolume / 100;
+        bgmAudioRef.current.loop = true;
+        bgmAudioRef.current.play();
+    }
+    playScene(currentSceneIdx === scenes.length - 1 ? 0 : currentSceneIdx);
+  };
+
+  const playScene = (index: number) => {
+    if (index >= scenes.length) {
+      setIsPlaying(false);
+      if (bgmAudioRef.current) bgmAudioRef.current.pause();
+      setCurrentSceneIdx(0);
+      return;
+    }
+
+    setCurrentSceneIdx(index);
+    setSceneStartTime(Date.now());
+    const scene = scenes[index];
+
+    if (scene.audioUrl && audioRef.current) {
+        audioRef.current.src = scene.audioUrl;
+        audioRef.current.volume = voiceVolume / 100;
+        audioRef.current.play();
+        audioRef.current.onended = () => {
+            playScene(index + 1);
+        };
+    } else {
+        setTimeout(() => playScene(index + 1), 3000);
+    }
+  };
+
+  const handleDownloadSRT = async () => {
+    if (scenes.length === 0) return;
+    setIsDownloading(true);
+    try {
+        let srtContent = '';
+        let currentTimeMs = 0;
+
+        const formatTime = (ms: number) => {
+            const totalSeconds = Math.floor(ms / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            const milliseconds = Math.floor(ms % 1000);
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+        };
+
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+
+        for (let index = 0; index < scenes.length; index++) {
+            const scene = scenes[index];
+            let durationMs = 3000;
+            if (scene.audioUrl) {
+                try {
+                    const res = await fetch(scene.audioUrl as string);
+                    const arrayBuffer = await res.arrayBuffer();
+                    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                    durationMs = audioBuffer.duration * 1000;
+                } catch(e) {
+                    durationMs = scene.dialogue.split(' ').length * 350 + 500;
+                }
+            }
+            
+            const startTime = formatTime(currentTimeMs);
+            const endTime = formatTime(currentTimeMs + durationMs);
+            
+            srtContent += `${index + 1}\n`;
+            srtContent += `${startTime} --> ${endTime}\n`;
+            srtContent += `${scene.dialogue}\n\n`;
+            
+            currentTimeMs += durationMs;
+        }
+
+        const blob = new Blob([srtContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${storyTitle || 'story'}_subtitles.srt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        console.error("SRT Generation failed", err);
+    } finally {
+        setIsDownloading(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (scenes.length === 0 || isDownloading) return;
+    setIsDownloading(true);
+    
+    try {
+        const canvas = canvasRef.current;
+        if (!canvas) throw new Error("Canvas not found");
+        
+        canvas.width = aspectRatio === '9:16' ? 576 : 1024;
+        canvas.height = aspectRatio === '9:16' ? 1024 : 576;
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error("Canvas ctx not found");
+
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const dest = audioCtx.createMediaStreamDestination();
+        
+        let bgmSource: AudioBufferSourceNode | null = null;
+        if (bgmTrack) {
+            try {
+                const response = await fetch(bgmTrack);
+                const arrayBuffer = await response.arrayBuffer();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                
+                bgmSource = audioCtx.createBufferSource();
+                bgmSource.buffer = audioBuffer;
+                bgmSource.loop = true;
+                
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = bgmVolume / 100;
+                
+                bgmSource.connect(gainNode);
+                gainNode.connect(dest);
+                bgmSource.start();
+            } catch (err) {
+                console.error("Failed to load BGM for export:", err);
+            }
+        }
+
+        // @ts-ignore
+        const videoStream = canvas.captureStream(30); 
+        
+        const combinedStream = new MediaStream([
+            ...videoStream.getVideoTracks(),
+            ...dest.stream.getAudioTracks()
+        ]);
+
+        let options: MediaRecorderOptions = { mimeType: 'video/mp4' };
+        if (!MediaRecorder.isTypeSupported('video/mp4')) {
+            options = { mimeType: 'video/webm' }; // Fallback for browsers that don't support mp4 encoding
+        }
+        const recorder = new MediaRecorder(combinedStream, options);
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        
+        recorder.start();
+
+        const loadedImages = await Promise.all(scenes.map(s => {
+            return new Promise<HTMLImageElement>((resolve) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.src = s.imageUrl || '';
+                img.onload = () => resolve(img);
+                img.onerror = () => resolve(img);
+            });
+        }));
+
+        let isRecordingProcess = true;
+        let scale = 1.0;
+        let currentDrawIdx = 0;
+        let exportSceneStartMs = Date.now();
+        let exportSceneDurationMs = 3000;
+
+        const drawFrame = () => {
+            if (!isRecordingProcess) return;
+            
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const scene = scenes[currentDrawIdx];
+            const img = loadedImages[currentDrawIdx];
+
+            const elapsedMs = Date.now() - exportSceneStartMs;
+            const progress = Math.min(1, elapsedMs / exportSceneDurationMs);
+
+            if (img && img.width > 0) {
+                const canvasRatio = canvas.width / canvas.height;
+                const imgRatio = img.width / img.height;
+                
+                let drawWidth, drawHeight;
+                if (canvasRatio > imgRatio) {
+                    drawWidth = canvas.width;
+                    drawHeight = canvas.width / imgRatio;
+                } else {
+                    drawHeight = canvas.height;
+                    drawWidth = canvas.height * imgRatio;
+                }
+                
+                // Apply Ken Burns zoom (15% zoom over scene duration)
+                const kbZoom = 1.0 + (progress * 0.15); 
+                const scaledWidth = drawWidth * kbZoom;
+                const scaledHeight = drawHeight * kbZoom;
+                
+                // Base offset to center the image
+                const baseOffsetX = (canvas.width - scaledWidth) / 2;
+                const baseOffsetY = (canvas.height - scaledHeight) / 2;
+                
+                // Ken Burns pan (alternating direction per scene)
+                const panDirX = currentDrawIdx % 2 === 0 ? 1 : -1;
+                const panDirY = currentDrawIdx % 3 === 0 ? 1 : -1;
+                
+                // Move from center by up to 5% of dimensions
+                const panOffsetX = (progress * (scaledWidth * 0.05)) * panDirX;
+                const panOffsetY = (progress * (scaledHeight * 0.05)) * panDirY;
+                
+                ctx.drawImage(img, baseOffsetX + panOffsetX, baseOffsetY + panOffsetY, scaledWidth, scaledHeight);
+            }
+
+            if (scene) {
+                if (scene.isThumbnail) {
+                    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                    gradient.addColorStop(0, "rgba(0,0,0,0.8)");
+                    gradient.addColorStop(0.5, "rgba(0,0,0,0.4)");
+                    gradient.addColorStop(1, "rgba(0,0,0,0.8)");
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    ctx.textAlign = "center";
+                    ctx.shadowColor = "black";
+                    ctx.shadowBlur = 8;
+                    
+                    ctx.fillStyle = "#fbbf24"; 
+                    ctx.font = "bold 28px Arial";
+                    ctx.fillText("हिंदी रहस्यमयी कहानी", canvas.width / 2, 120);
+
+                    ctx.fillStyle = "white";
+                    ctx.font = "bold 48px Arial";
+                    ctx.fillText(storyTitle, canvas.width / 2, canvas.height / 2);
+
+                    ctx.fillStyle = "#ef4444";
+                    ctx.font = "bold 28px Arial";
+                    ctx.fillText(storyPart, canvas.width / 2, canvas.height - 120);
+                } else if (subtitleStyle !== 'none') {
+                    const elapsed = Date.now() - exportSceneStartMs;
+                    const words = scene.dialogue.split(' ');
+                    let activeWordIndex = Math.floor((elapsed / exportSceneDurationMs) * words.length);
+                    if (isNaN(activeWordIndex) || activeWordIndex < 0) activeWordIndex = 0;
+                    if (activeWordIndex >= words.length) activeWordIndex = words.length - 1;
+                    
+                    if (subtitleStyle === 'viral') {
+                        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+                        ctx.fillRect(0, canvas.height - 120, canvas.width, 120);
+                        
+                        ctx.textAlign = "center";
+                        ctx.shadowColor = "black";
+                        ctx.shadowBlur = 4;
+                        
+                        const wordsPerChunk = 2;
+                        const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
+                        const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
+                        
+                        ctx.fillStyle = "#fbbf24"; 
+                        ctx.font = "bold 56px Arial";
+                        ctx.fillText(chunk.toUpperCase(), canvas.width / 2, canvas.height - 45);
+                    } else if (subtitleStyle === 'cinematic') {
+                        ctx.textAlign = "center";
+                        ctx.shadowColor = "black";
+                        ctx.shadowBlur = 8;
+                        
+                        const wordsPerChunk = 5;
+                        const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
+                        const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
+                        
+                        ctx.fillStyle = "white"; 
+                        ctx.font = "italic 32px Arial";
+                        ctx.fillText(chunk, canvas.width / 2, canvas.height - 40);
+                    }
+                }
+            }
+
+            requestAnimationFrame(drawFrame);
+        };
+
+        const processScene = async (idx: number) => {
+            if (idx >= scenes.length) {
+                isRecordingProcess = false;
+                if (bgmSource) bgmSource.stop();
+                recorder.stop();
+                return;
+            }
+            
+            currentDrawIdx = idx;
+            scale = 1.0;
+            exportSceneStartMs = Date.now();
+            exportSceneDurationMs = 3000;
+            
+            if (scenes[idx].audioUrl) {
+                try {
+                    const res = await fetch(scenes[idx].audioUrl as string);
+                    const arrayBuffer = await res.arrayBuffer();
+                    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                    exportSceneDurationMs = audioBuffer.duration * 1000;
+                    
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = audioBuffer;
+                    
+                    const voiceGainNode = audioCtx.createGain();
+                    voiceGainNode.gain.value = voiceVolume / 100;
+                    
+                    source.connect(voiceGainNode);
+                    voiceGainNode.connect(dest);
+                    
+                    source.start();
+                    
+                    setTimeout(() => processScene(idx + 1), audioBuffer.duration * 1000);
+                } catch (err) {
+                    console.error("Audio decode error", err);
+                    setTimeout(() => processScene(idx + 1), 3000);
+                }
+            } else {
+                setTimeout(() => processScene(idx + 1), 3000);
+            }
+        };
+
+        audioCtx.resume().then(() => {
+            drawFrame();
+            processScene(0);
+        });
+
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: options.mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = 'AI_StoryCraft_Video.mp4'; // Always save with .mp4 extension
+            document.body.appendChild(a);
+            a.click();
+            URL.revokeObjectURL(url);
+            setIsDownloading(false);
+            showToast("Video Exported Successfully!");
+        };
+
+    } catch (e) {
+        console.error(e);
+        alert("Failed to export video.");
+        setIsDownloading(false);
+    }
+  };
+
+  const handleEditVideo = () => {
+    setIsStoryboardMode(true);
+    setStatus('Idle');
+    setScenes([]);
+    setCurrentSceneIdx(0);
+    showToast("Editing mode activated. Modify your scenes and regenerate!");
+  };
+
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-50 font-sans selection:bg-indigo-500/30">
+      <audio ref={audioRef} className="hidden" />
+      <canvas ref={canvasRef} width={800} height={600} className="hidden" />
+
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 50 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-800 border border-slate-700 text-white px-6 py-3 rounded-full shadow-2xl flex items-center space-x-2"
+          >
+            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+            <span className="font-medium text-sm">{toast}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-indigo-500/20 blur-[120px] rounded-full" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-purple-500/20 blur-[120px] rounded-full" />
+      </div>
+
+      {/* NAVBAR */}
+      <Nav />
+
+      {/* MAIN APP SECTION */}
+      <section id="app-section" className="relative max-w-7xl mx-auto px-6 pt-32 pb-12 min-h-screen flex flex-col justify-start">
+        <div className="grid lg:grid-cols-2 gap-12 w-full">
+          
+          {/* LEFT SIDE: SCRIPT / SCENE EDITOR */}
+          <div className="space-y-6">
+            <AnimatePresence mode="wait">
+              {!isStoryboardMode ? (
+                <motion.div 
+                  key="script-editor"
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  className="relative group flex-1 flex flex-col min-h-0"
+                >
+                  <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/50 to-purple-500/50 rounded-3xl blur opacity-25 transition duration-1000" />
+                  <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-3xl border border-slate-800 p-6 shadow-2xl flex flex-col h-[calc(100vh-12rem)] min-h-[600px]">
+                    
+                    {/* Tabs Header */}
+                    <div className="flex space-x-2 border-b border-slate-800 pb-4 mb-4">
+                      <button
+                        onClick={() => setActiveTab('script')}
+                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                          activeTab === 'script' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <PenTool className="w-4 h-4" />
+                        <span>Script & Idea</span>
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('settings')}
+                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                          activeTab === 'settings' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <Settings className="w-4 h-4" />
+                        <span>Settings & Audio</span>
+                      </button>
+                    </div>
+
+                    {/* Tab Content */}
+                    <AnimatePresence mode="wait">
+                      {activeTab === 'settings' && (
+                        <motion.div
+                          key="settings-tab"
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          className="grid grid-cols-1 sm:grid-cols-2 gap-6"
+                        >
+                          <div className="flex flex-col space-y-2">
+                            <label className="text-sm font-medium flex items-center space-x-2 text-slate-300">
+                              <ImageIcon className="w-4 h-4 text-indigo-400" />
+                              <span>Visual Style</span>
+                            </label>
+                            <select 
+                              value={visualStyle}
+                              onChange={(e) => setVisualStyle(e.target.value)}
+                              className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
+                            >
+                              {VISUAL_STYLES.map(style => <option key={style} value={style}>{style}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex flex-col space-y-2">
+                            <label className="text-sm font-medium flex items-center space-x-2 text-slate-300">
+                              <Music className="w-4 h-4 text-pink-400" />
+                              <span>Background Music</span>
+                            </label>
+                            <select 
+                              value={bgmTrack}
+                              onChange={(e) => setBgmTrack(e.target.value)}
+                              className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
+                            >
+                              {BGM_TRACKS.map(track => <option key={track.name} value={track.url}>{track.name}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex flex-col space-y-2">
+                            <label className="text-sm font-medium flex items-center space-x-2 text-slate-300">
+                              <Smartphone className="w-4 h-4 text-emerald-400" />
+                              <span>Aspect Ratio</span>
+                            </label>
+                            <select 
+                              value={aspectRatio}
+                              onChange={(e) => setAspectRatio(e.target.value as any)}
+                              className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
+                            >
+                              <option value="16:9">YouTube (16:9)</option>
+                              <option value="9:16">Shorts/Reels (9:16)</option>
+                            </select>
+                          </div>
+                          <div className="flex flex-col space-y-2">
+                            <label className="text-sm font-medium flex items-center space-x-2 text-slate-300">
+                              <Globe className="w-4 h-4 text-cyan-400" />
+                              <span>Dubbing Lang</span>
+                            </label>
+                            <select 
+                              value={targetLanguage}
+                              onChange={(e) => setTargetLanguage(e.target.value)}
+                              className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
+                            >
+                              {LANGUAGES.map(lang => <option key={lang} value={lang}>{lang}</option>)}
+                            </select>
+                          </div>
+                          <div className="flex flex-col space-y-2">
+                            <label className="text-sm font-medium flex items-center space-x-2 text-slate-300">
+                              <Volume2 className="w-4 h-4 text-orange-400" />
+                              <span>BGM Volume: {bgmVolume}%</span>
+                            </label>
+                            <input 
+                              type="range" min="0" max="100" value={bgmVolume} onChange={(e) => setBgmVolume(Number(e.target.value))}
+                              className="w-full accent-orange-500 cursor-pointer"
+                            />
+                          </div>
+                          <div className="flex flex-col space-y-2">
+                            <label className="text-sm font-medium flex items-center space-x-2 text-slate-300">
+                              <Mic className="w-4 h-4 text-violet-400" />
+                              <span>Voice Volume: {voiceVolume}%</span>
+                            </label>
+                            <input 
+                              type="range" min="0" max="100" value={voiceVolume} onChange={(e) => setVoiceVolume(Number(e.target.value))}
+                              className="w-full accent-violet-500 cursor-pointer"
+                            />
+                          </div>
+                          <div className="flex flex-col space-y-2 sm:col-span-2">
+                            <label className="text-sm font-medium flex items-center space-x-2 text-slate-300">
+                              <Type className="w-4 h-4 text-yellow-400" />
+                              <span>Subtitle Style</span>
+                            </label>
+                            <select 
+                              value={subtitleStyle}
+                              onChange={(e) => setSubtitleStyle(e.target.value as any)}
+                              className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
+                            >
+                              <option value="viral">Viral Shorts (Big & Yellow)</option>
+                              <option value="cinematic">Cinematic (Subtle & White)</option>
+                              <option value="none">None (Hide Subtitles)</option>
+                            </select>
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {activeTab === 'script' && (
+                        <motion.div
+                          key="script-tab"
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          className="flex flex-col flex-1 min-h-0 space-y-4"
+                        >
+                          {/* Brainstorm Engine */}
+                          <div className="flex items-center space-x-4 bg-indigo-500/10 border border-indigo-500/30 p-4 rounded-xl">
+                            <div className="flex-1 flex flex-col justify-center">
+                              <label className="text-sm font-medium flex items-center space-x-2 text-indigo-300 mb-2">
+                                <Zap className="w-4 h-4" />
+                                <span>Magic Brainstorm</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={idea}
+                                onChange={(e) => setIdea(e.target.value)}
+                                placeholder="Type an idea (e.g. A dog who went to space)"
+                                className="w-full bg-slate-900/80 rounded-lg px-4 py-2 outline-none text-sm text-slate-200 placeholder:text-slate-500 border border-transparent focus:border-indigo-500 transition-colors"
+                              />
+                            </div>
+                            <button
+                              onClick={handleBrainstorm}
+                              disabled={isBrainstorming || !idea}
+                              className="mt-6 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold text-sm transition-all disabled:opacity-50 flex items-center justify-center space-x-2 min-w-[140px]"
+                            >
+                              {isBrainstorming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                              <span>Write Script</span>
+                            </button>
+                          </div>
+
+                          <div className="flex space-x-4">
+                            <input
+                              type="text"
+                              value={storyTitle}
+                              onChange={(e) => setStoryTitle(e.target.value)}
+                              placeholder="Story Title (e.g. रहस्यमयी गुफा)"
+                              className="w-2/3 bg-slate-950/50 rounded-xl px-4 py-3 outline-none text-md font-medium text-slate-200 placeholder:text-slate-600 border border-transparent focus:border-indigo-500/30 transition-colors"
+                            />
+                            <input
+                              type="text"
+                              value={storyPart}
+                              onChange={(e) => setStoryPart(e.target.value)}
+                              placeholder="Part 1"
+                              className="w-1/3 bg-slate-950/50 rounded-xl px-4 py-3 outline-none text-md font-medium text-slate-200 placeholder:text-slate-600 border border-transparent focus:border-indigo-500/30 transition-colors"
+                            />
+                          </div>
+
+                          <textarea
+                            value={script}
+                            onChange={(e) => setScript(e.target.value)}
+                            placeholder="एक छोटे से गाँव में..."
+                            className="w-full flex-1 bg-slate-950/50 rounded-xl p-4 resize-none outline-none text-lg text-slate-200 placeholder:text-slate-600 custom-scrollbar border border-transparent focus:border-indigo-500/30 transition-colors"
+                          />
+                          
+                          <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-800">
+                            <span className="text-sm text-slate-500 font-medium">
+                              {script.length} characters
+                            </span>
+                            <button
+                              onClick={handleGenerateStoryboard}
+                              disabled={isGeneratingStoryboard || !script.trim()}
+                              className="relative overflow-hidden group px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition-all font-medium flex items-center space-x-2 shadow-[0_0_20px_rgba(79,70,229,0.3)]"
+                            >
+                              <span className="relative z-10">{isGeneratingStoryboard ? 'Analyzing Script...' : 'Generate Storyboard'}</span>
+                              {!isGeneratingStoryboard && <ChevronRight className="w-4 h-4 relative z-10 group-hover:translate-x-1 transition-transform" />}
+                            </button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div 
+                  key="scene-editor"
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  className="relative group flex-1 flex flex-col min-h-0"
+                >
+                  <div className="absolute -inset-1 bg-gradient-to-r from-emerald-500/50 to-teal-500/50 rounded-3xl blur opacity-25 transition duration-1000" />
+                  <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-3xl border border-slate-800 p-6 shadow-2xl flex flex-col h-[calc(100vh-12rem)] min-h-[600px]">
+                    
+                    <div className="flex items-center justify-between mb-4">
+                       <h3 className="text-lg font-semibold flex items-center space-x-2">
+                         <Edit3 className="w-5 h-5 text-emerald-400" />
+                         <span>Scene Editor</span>
+                       </h3>
+                       <button onClick={() => setIsStoryboardMode(false)} className="text-sm text-slate-400 hover:text-white transition-colors">
+                          &larr; Back to Script
+                       </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
+                      {storyboardScenes.map((scene, idx) => (
+                        <div key={idx} className="bg-slate-950/50 p-4 rounded-xl border border-slate-800 space-y-3">
+                           <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-500 bg-slate-900 px-2 py-1 rounded-md">SCENE {idx + 1}</span>
+                           </div>
+                           <div className="space-y-1">
+                              <label className="text-xs text-slate-400 ml-1">Dialogue (Hindi)</label>
+                              <input 
+                                type="text" 
+                                value={scene.dialogue}
+                                onChange={(e) => updateScene(idx, 'dialogue', e.target.value)}
+                                className="w-full bg-slate-800/50 rounded-lg px-3 py-2 text-sm outline-none border border-transparent focus:border-emerald-500/50 text-slate-200"
+                              />
+                           </div>
+                           <div className="space-y-1">
+                              <label className="text-xs text-slate-400 ml-1">Image Prompt (English)</label>
+                              <textarea 
+                                value={scene.imagePrompt}
+                                onChange={(e) => updateScene(idx, 'imagePrompt', e.target.value)}
+                                rows={2}
+                                className="w-full bg-slate-800/50 rounded-lg px-3 py-2 text-sm outline-none border border-transparent focus:border-emerald-500/50 resize-none text-slate-200"
+                              />
+                           </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 pt-4 border-t border-slate-800 flex justify-end">
+                      <button
+                        onClick={handleDownloadSRT}
+                        disabled={isGeneratingVideo}
+                        className="mr-3 px-4 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 disabled:opacity-50 transition-all font-medium flex items-center space-x-2 text-slate-200"
+                      >
+                        <FileText className="w-4 h-4" />
+                        <span>Export .SRT</span>
+                      </button>
+                      <button
+                        onClick={handleGenerateVideo}
+                        disabled={isGeneratingVideo}
+                        className="relative overflow-hidden group px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 transition-all font-medium flex items-center space-x-2 shadow-[0_0_20px_rgba(16,185,129,0.3)]"
+                      >
+                        <span className="relative z-10">{isGeneratingVideo ? 'Generating Video...' : 'Create Video'}</span>
+                        {!isGeneratingVideo && <Wand2 className="w-4 h-4 relative z-10 group-hover:rotate-12 transition-transform" />}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* RIGHT SIDE: VIDEO PLAYER */}
+          <div className="flex flex-col">
+            <div className="flex-1 bg-slate-900/50 backdrop-blur-xl border border-slate-800/80 rounded-3xl relative overflow-hidden flex items-center justify-center h-[calc(100vh-12rem)] min-h-[600px] shadow-2xl">
+              
+              <AnimatePresence mode="wait">
+                {isGeneratingVideo ? (
+                  <motion.div
+                    key="generating"
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="flex flex-col items-center text-center space-y-6 z-10"
+                  >
+                    <div className="relative w-24 h-24 mb-6">
+                      <div className="absolute inset-0 bg-indigo-500 blur-xl opacity-30 animate-pulse rounded-full" />
+                      <svg className="w-full h-full -rotate-90 transform" viewBox="0 0 100 100">
+                        <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="8" className="text-slate-800" />
+                        <motion.circle 
+                          cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="8" 
+                          strokeDasharray="283" strokeDashoffset={283 - (283 * progress) / 100}
+                          className="text-indigo-500 transition-all duration-500 ease-out" 
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center text-lg font-bold text-white">
+                        {progress}%
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-semibold mb-2">{status}</h3>
+                      <p className="text-slate-400 text-sm">Please wait while the AI works its magic.</p>
+                    </div>
+                  </motion.div>
+                ) : status === 'Ready' && scenes.length > 0 ? (
+                  <motion.div
+                    key="ready"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="absolute inset-0 bg-black overflow-hidden flex flex-col items-center justify-center group"
+                  >
+                    {scenes[currentSceneIdx]?.imageUrl ? (
+                      <motion.img 
+                        key={currentSceneIdx}
+                        src={scenes[currentSceneIdx].imageUrl} 
+                        alt="Story Scene" 
+                        className="absolute inset-0 w-full h-full object-cover"
+                        initial={{ scale: 1, opacity: 0 }}
+                        animate={{ scale: isPlaying ? 1.05 : 1, opacity: 1 }}
+                        transition={{ scale: { duration: 8, ease: "linear" }, opacity: { duration: 0.5 } }}
+                      />
+                    ) : (
+                       <div className="absolute inset-0 flex items-center justify-center bg-slate-800 text-slate-400 text-sm">
+                         Image Failed to Load
+                       </div>
+                    )}
+                    
+                    {/* Controls Overlay */}
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center space-y-6">
+                       <button 
+                         onClick={handlePlay}
+                         className="w-20 h-20 bg-indigo-500/80 backdrop-blur-md rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(99,102,241,0.4)] hover:scale-105 transition-transform"
+                       >
+                         {isPlaying ? (
+                           <Pause className="w-8 h-8 text-white" />
+                         ) : (
+                           <Play className="w-8 h-8 ml-1 text-white" />
+                         )}
+                       </button>
+                    </div>
+
+                    {/* Captions & Titles */}
+                    <motion.div 
+                      initial={{ y: 20, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      key={'caption'+currentSceneIdx}
+                      className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
+                    >
+                       {scenes[currentSceneIdx]?.isThumbnail ? (
+                         <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/20 to-black/80 flex flex-col items-center justify-between py-16">
+                           <h2 className="text-2xl md:text-3xl font-bold text-amber-400 drop-shadow-2xl">
+                             हिंदी रहस्यमयी कहानी
+                           </h2>
+                           <h1 className="text-4xl md:text-5xl font-extrabold text-white drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] text-center px-6 leading-tight">
+                             {storyTitle}
+                           </h1>
+                           <div className="bg-red-600/90 backdrop-blur-sm px-6 py-2 rounded-full shadow-[0_0_20px_rgba(220,38,38,0.5)] border border-red-400/50">
+                             <span className="text-xl md:text-2xl font-bold text-white drop-shadow-md">
+                               {storyPart}
+                             </span>
+                           </div>
+                         </div>
+                       ) : (
+                         <div className="absolute bottom-16 left-8 right-8 text-center flex flex-col items-center">
+                           <p className="text-3xl md:text-5xl font-black text-amber-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)] uppercase">
+                             {isPlaying ? activeCaptionChunk : scenes[currentSceneIdx]?.dialogue}
+                           </p>
+                         </div>
+                       )}
+                    </motion.div>
+
+                    <div className="absolute bottom-6 left-6 right-6 flex items-center space-x-4">
+                      {isPlaying && (
+                        <div className="flex space-x-1 items-end h-4 mr-2">
+                           <motion.div animate={{ height: ["4px", "16px", "4px"] }} transition={{ repeat: Infinity, duration: 0.8 }} className="w-1 bg-white rounded-t-sm" />
+                           <motion.div animate={{ height: ["8px", "12px", "8px"] }} transition={{ repeat: Infinity, duration: 1.2 }} className="w-1 bg-white rounded-t-sm" />
+                           <motion.div animate={{ height: ["12px", "6px", "12px"] }} transition={{ repeat: Infinity, duration: 0.9 }} className="w-1 bg-white rounded-t-sm" />
+                        </div>
+                      )}
+                      <div className="h-1 flex-1 bg-slate-800/80 rounded-full overflow-hidden backdrop-blur-md">
+                        {isPlaying && <motion.div className="h-full bg-indigo-500" initial={{ width: "0%" }} animate={{ width: "100%" }} transition={{ duration: scenes.length ? (1/scenes.length) * 100 : 0 }} />}
+                      </div>
+                    </div>
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="idle"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex flex-col items-center text-slate-500 space-y-4"
+                  >
+                    <div className="p-4 bg-slate-800/30 rounded-2xl">
+                      <Video className="w-8 h-8 opacity-50" />
+                    </div>
+                    <p>Your generated video will appear here</p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+            </div>
+          </div>
+        </div>
+
+        {/* BOTTOM ACTIONS (EXPORT MP4 & EDIT) */}
+        {status === 'Ready' && scenes.length > 0 && (
+          <motion.div 
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-8 flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-6"
+          >
+             <button 
+               onClick={handleDownload}
+               disabled={isDownloading}
+               className="flex items-center space-x-2 px-8 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-full font-bold transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] disabled:opacity-50 text-lg w-full sm:w-auto justify-center hover:scale-105"
+             >
+               {isDownloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+               <span>{isDownloading ? 'Rendering MP4...' : 'Export as MP4'}</span>
+             </button>
+             
+             <button 
+               onClick={handleEditVideo}
+               className="flex items-center space-x-2 px-8 py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-full font-bold transition-all w-full sm:w-auto justify-center text-lg hover:scale-105 text-slate-300 hover:text-white"
+             >
+               <Edit3 className="w-5 h-5" />
+               <span>Edit Scenes & Regenerate</span>
+             </button>
+          </motion.div>
+        )}
+      </section>
+    </div>
+  );
+}
