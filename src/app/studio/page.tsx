@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Wand2, Play, Sparkles, Video, Pause, AlertCircle, Download, Loader2, Edit3, ChevronRight, CheckCircle2, Image as ImageIcon, Globe, Mail, Link, XCircle, MessageSquare, Mic, Scissors, Zap, Music, Smartphone, Settings, PenTool, Volume2, Type, FileText } from 'lucide-react';
+import { Wand2, Play, Sparkles, Video, Pause, AlertCircle, Download, Loader2, Edit3, ChevronRight, CheckCircle2, Image as ImageIcon, Globe, Mail, Link, XCircle, MessageSquare, Mic, Scissors, Zap, Music, Smartphone, Settings, PenTool, Volume2, Type, FileText, Upload, Trash2 } from 'lucide-react';
 
 import Nav from '../../components/Nav';
 
@@ -165,6 +165,27 @@ export default function Home() {
     setStoryboardScenes(newScenes);
   };
 
+  const handleImageUpload = (index: number, event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const objectUrl = URL.createObjectURL(file);
+      const newScenes = [...storyboardScenes];
+      newScenes[index] = {
+        ...newScenes[index],
+        imageUrl: objectUrl
+      };
+      setStoryboardScenes(newScenes);
+      showToast("Custom image uploaded for Scene " + (index + 1));
+    }
+  };
+
+  const handleRemoveImage = (index: number) => {
+    const newScenes = [...storyboardScenes];
+    delete newScenes[index].imageUrl;
+    setStoryboardScenes(newScenes);
+    showToast("Reverted Scene " + (index + 1) + " back to AI generation.");
+  };
+
   const handleGenerateVideo = async () => {
     if (storyboardScenes.length === 0) return;
     setIsGeneratingVideo(true);
@@ -187,12 +208,16 @@ export default function Home() {
           let imageUrl: string | undefined = undefined;
           let audioUrl: string | undefined = undefined;
           
+          const skipImageGen = !!scene.imageUrl;
+          
           const [imgRes, audioRes] = await Promise.all([
-              fetch('/api/image', {
-                  method: 'POST',
-                  body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio }),
-                  headers: { 'Content-Type': 'application/json' }
-              }).catch(e => ({ ok: false, statusText: e.message, blob: async () => null })),
+              skipImageGen
+                ? Promise.resolve({ ok: true })
+                : fetch('/api/image', {
+                    method: 'POST',
+                    body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio }),
+                    headers: { 'Content-Type': 'application/json' }
+                }).catch(e => ({ ok: false, statusText: e.message, blob: async () => null })),
               fetch('/api/tts', {
                   method: 'POST',
                   body: JSON.stringify({ text: scene.dialogue }),
@@ -200,10 +225,13 @@ export default function Home() {
               }).catch(e => ({ ok: false, json: async () => ({}) }))
           ]);
 
-          if (imgRes.ok) {
+          if (skipImageGen) {
+             imageUrl = scene.imageUrl;
+          } else if (imgRes.ok) {
              const blob = await (imgRes as any).blob();
              if (blob) imageUrl = URL.createObjectURL(blob);
           }
+          
           if (audioRes.ok) {
              const audioData = await (audioRes as any).json();
              if (audioData.audioUrl) audioUrl = audioData.audioUrl;
@@ -216,7 +244,7 @@ export default function Home() {
           setProgress(currentProgress);
           setStatus(`Generating Scene ${completed} of ${totalScenes} (${currentProgress}%)`);
           
-          if (completed < totalScenes) {
+          if (completed < totalScenes && !skipImageGen) {
               // Wait 1.5 seconds before asking for the next image to prevent Rate Limiting
               await new Promise(resolve => setTimeout(resolve, 1500));
           }
@@ -399,7 +427,9 @@ export default function Home() {
         const loadedImages = await Promise.all(scenes.map(s => {
             return new Promise<HTMLImageElement>((resolve) => {
                 const img = new Image();
-                img.crossOrigin = "anonymous";
+                if (s.imageUrl && !s.imageUrl.startsWith('blob:') && !s.imageUrl.startsWith('data:')) {
+                    img.crossOrigin = "anonymous";
+                }
                 img.src = s.imageUrl || '';
                 img.onload = () => resolve(img);
                 img.onerror = () => resolve(img);
@@ -886,6 +916,56 @@ export default function Home() {
                                 rows={2}
                                 className="w-full bg-slate-800/50 rounded-lg px-3 py-2 text-sm outline-none border border-transparent focus:border-emerald-500/50 resize-none text-slate-200"
                               />
+                           </div>
+                           
+                           {/* Custom Image Upload */}
+                           <div className="space-y-1">
+                              <label className="text-xs text-slate-400 ml-1 flex items-center space-x-1">
+                                 <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />
+                                 <span>Custom Image (Optional)</span>
+                              </label>
+                              
+                              {scene.imageUrl ? (
+                                 <div className="relative group/img w-full h-32 rounded-lg overflow-hidden border border-slate-700 bg-slate-900">
+                                    <img 
+                                       src={scene.imageUrl} 
+                                       alt={`Scene ${idx + 1} Custom Image`} 
+                                       className="w-full h-full object-cover"
+                                    />
+                                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center space-x-3">
+                                       <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg">
+                                          <Upload className="w-3.5 h-3.5" />
+                                          <span>Change</span>
+                                          <input 
+                                             type="file" 
+                                             accept="image/*" 
+                                             className="hidden" 
+                                             onChange={(e) => handleImageUpload(idx, e)}
+                                          />
+                                       </label>
+                                       <button 
+                                          onClick={() => handleRemoveImage(idx)}
+                                          className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg"
+                                       >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                          <span>Remove</span>
+                                       </button>
+                                    </div>
+                                 </div>
+                              ) : (
+                                 <label className="flex flex-col items-center justify-center w-full h-20 border border-dashed border-slate-700 hover:border-emerald-500/50 rounded-lg cursor-pointer bg-slate-900/30 hover:bg-slate-900/50 transition-all group/upload">
+                                    <div className="flex flex-col items-center justify-center space-y-1">
+                                       <Upload className="w-5 h-5 text-slate-500 group-hover/upload:text-emerald-400 transition-colors" />
+                                       <span className="text-xs text-slate-400 group-hover/upload:text-slate-300">Click to upload custom image</span>
+                                    </div>
+                                    <input 
+                                       type="file" 
+                                       accept="image/*" 
+                                       className="hidden" 
+                                       onChange={(e) => handleImageUpload(idx, e)}
+                                    />
+                                 </label>
+                              )}
                            </div>
                         </div>
                       ))}
