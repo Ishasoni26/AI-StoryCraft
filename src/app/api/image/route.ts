@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
-    const { prompt, style, aspectRatio } = await req.json();
+    const { prompt, style, aspectRatio, seed } = await req.json();
 
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
@@ -17,9 +17,10 @@ export async function POST(req: Request) {
         height = 1024;
     }
     
-    const seed = 42; 
+    // Use the provided seed for consistency, or generate a random one if omitted.
+    const imageSeed = seed !== undefined ? seed : Math.floor(Math.random() * 1000000); 
     const encodedPrompt = encodeURIComponent(`Masterpiece, best quality, ${visualStyle}, ${prompt}`);
-    const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${seed}`;
+    const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${imageSeed}`;
 
     const response = await fetch(imageApiUrl);
 

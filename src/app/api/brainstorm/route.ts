@@ -5,7 +5,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    const { idea } = await req.json();
+    const { idea, characterProfile, locationProfile } = await req.json();
 
     if (!idea) {
       return NextResponse.json({ error: 'Idea is required' }, { status: 400 });
@@ -20,6 +20,9 @@ export async function POST(req: Request) {
     const prompt = `
 You are a viral YouTube Shorts scriptwriter.
 A user has provided a short topic/idea: "${idea}"
+
+${characterProfile ? `The main character is EXACTLY: "${characterProfile}". Make sure the story revolves around this character.` : ''}
+${locationProfile ? `The main location/universe where this story takes place is EXACTLY: "${locationProfile}". Establish this setting clearly.` : ''}
 
 Write a highly engaging, fast-paced 60-second YouTube Short story script in HINDI based on this idea.
 The script should be purely the narrative voiceover (no camera directions or sound effect notes).

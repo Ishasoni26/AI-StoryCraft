@@ -6,7 +6,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    const { script, targetLanguage } = await req.json();
+    const { script, targetLanguage, characterProfile, locationProfile } = await req.json();
 
     if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'put_your_free_gemini_key_here') {
       // Return Mock Data so the user can test the app without an API key
@@ -28,38 +28,46 @@ export async function POST(req: Request) {
       });
     }
     
-    const langInstruction = targetLanguage && targetLanguage !== 'Hindi' 
-      ? `\nCRITICAL DUBBING INSTRUCTION: The input script is in Hindi, but you MUST translate the "dialogue" field natively into ${targetLanguage}. Do NOT return Hindi dialogue if ${targetLanguage} is requested.`
+    if (!script) {
+      return NextResponse.json({ error: 'Script is required' }, { status: 400 });
+    }
+
+    const langInstruction = targetLanguage 
+      ? `Ensure the generated dialogue is completely translated to ${targetLanguage} ONLY.`
       : '';
+
+    const charInstruction = characterProfile
+      ? `2. THE USER HAS PROVIDED THE MASTER CHARACTER DESCRIPTION: "${characterProfile}". YOU MUST START EVERY SINGLE IMAGE PROMPT WITH THIS EXACT DESCRIPTION! DO NOT INVENT A NEW CHARACTER. DO NOT SUMMARIZE IT.`
+      : `2. CREATE A MASTER CHARACTER DESCRIPTION: Invent a highly detailed physical description for them (e.g. "A 20-year-old Indian boy named Rohan with short messy black hair, wearing a white t-shirt and blue denim jacket"). Use this in every prompt.`;
+
+    const locInstruction = locationProfile
+      ? `3. THE USER HAS PROVIDED THE MASTER LOCATION DESCRIPTION: "${locationProfile}". If the scene happens here, YOU MUST INCLUDE THIS EXACT LOCATION DESCRIPTION IN THE IMAGE PROMPT.`
+      : `3. VISUAL STYLE: You must use a highly detailed, dramatic, cinematic style.`;
 
     const prompt = `
 You are an EXPERT AI Storyboard Director and Master Prompt Engineer for Stable Diffusion.
-I will give you a story script in Hindi. 
-Your ONLY job is to take the script and logically divide it into engaging VISUAL SCENES. 
-Do not just split it sentence by sentence! Group related sentences together if they describe the same location, action, or visual moment. Each scene should represent a single camera shot or visual environment.
-CRITICAL INSTRUCTIONS FOR IMAGE PROMPTS:
-1. IDENTIFY THE PROTAGONIST FIRST: Read the whole script first. Identify the main character(s).
-2. CREATE A MASTER CHARACTER DESCRIPTION: Invent a highly detailed physical description for them (e.g. "A 20-year-old Indian boy named Rohan with short messy black hair, wearing a white t-shirt and blue denim jacket").
-3. ENFORCE 100% CONTINUITY: You MUST include this EXACT SAME master character description in EVERY SINGLE imagePrompt where the character appears. NEVER change their clothes, hair, or age between scenes!
-4. SCENE CONTEXT & BACKGROUND: Read the Hindi sentence carefully. What is happening? Where are they? Describe the action and the background vividly in English. 
-   - Poor: "Rohan is standing."
-   - Excellent: "The 20-year-old Indian boy named Rohan with short messy black hair wearing a blue denim jacket is standing in the middle of a crowded, sunlit college campus courtyard, looking surprised, cinematic lighting, masterpiece, 8k resolution."
-5. Write ALL imagePrompts in highly detailed, comma-separated English format optimized for AI image generators.
-${langInstruction}
+You are converting a short ${targetLanguage} story into a highly engaging, visual 6-scene storyboard.
 
-For each scene, provide:
-1. "imagePrompt": The highly detailed, continuous English prompt as instructed above.
-2. "dialogue": The exact text of that SINGLE short sentence (translated to ${targetLanguage || 'Hindi'} as instructed above).
-
-Return the result STRICTLY as a JSON array of objects. Do not include markdown formatting or backticks around the JSON.
-Example format:
-[
-  { "imagePrompt": "A 20-year-old Indian boy named Rohan with short messy black hair wearing a blue denim jacket, standing in front of a grand college building, holding books, cinematic lighting", "dialogue": "रोहन एक साधारण कॉलेज छात्र था।" },
-  { "imagePrompt": "A 20-year-old Indian boy named Rohan with short messy black hair wearing a blue denim jacket, sitting alone on a park bench looking sad, cinematic lighting", "dialogue": "लेकिन वह हमेशा उदास रहता था।" }
-]
-
-Story Script:
+STORY SCRIPT:
+"""
 ${script}
+"""
+
+YOUR TASK:
+1. Divide the story into 5-8 dramatic scenes.
+${charInstruction}
+${locInstruction}
+4. SCENE CONTEXT: Read the sentence carefully. What is happening? Describe the action vividly in English. 
+   - Poor: "Rohan is standing."
+   - Excellent: "${characterProfile || "A 20-year-old Indian boy named Rohan..."} is standing in the middle of a ${locationProfile || "crowded, sunlit college campus courtyard"}, looking surprised, cinematic lighting, masterpiece, 8k resolution."
+5. Write ALL imagePrompts in highly detailed, comma-separated English format optimized for AI image generators. START EVERY SINGLE PROMPT WITH THE EXACT CHARACTER DESCRIPTION AND INCLUDE THE LOCATION.
+6. Extract the exact ${targetLanguage} dialogue/sentence for each scene.
+
+Return the result as a raw JSON array of objects:
+[
+  { "imagePrompt": "...", "dialogue": "..." },
+  ...
+]
     `;
 
     let responseText;
