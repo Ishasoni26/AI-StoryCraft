@@ -6,7 +6,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 export async function POST(req: Request) {
   try {
-    const { script, targetLanguage } = await req.json();
+    const { script, targetLanguage, characters } = await req.json();
 
     if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'put_your_free_gemini_key_here') {
       // Return Mock Data so the user can test the app without an API key
@@ -32,15 +32,29 @@ export async function POST(req: Request) {
       ? `\nCRITICAL DUBBING INSTRUCTION: The input script is in Hindi, but you MUST translate the "dialogue" field natively into ${targetLanguage}. Do NOT return Hindi dialogue if ${targetLanguage} is requested.`
       : '';
 
+    // Check if custom character descriptions were passed
+    const characterListStr = (characters && characters.length > 0)
+      ? characters.map((c: any) => `- Character Name: ${c.name}\n  Visual Description: ${c.description}`).join('\n')
+      : '';
+
+    const characterInstructions = characterListStr 
+      ? `CRITICAL CHARACTER DEFINITIONS (USER-DEFINED):
+The user has predefined the characters for this story. You MUST use these exact visual descriptions in the "imagePrompt" whenever the character appears in a scene. Do NOT invent new descriptions for these characters:
+${characterListStr}
+CRITICAL INSTRUCTIONS FOR IMAGE PROMPTS:
+1. ENFORCE 100% CONTINUITY: You MUST include the EXACT user-defined character descriptions in EVERY SINGLE imagePrompt where the character appears. Never change their physical details or clothing.`
+      : `CRITICAL INSTRUCTIONS FOR IMAGE PROMPTS:
+1. IDENTIFY THE PROTAGONIST FIRST: Read the whole script first. Identify the main character(s).
+2. CREATE A MASTER CHARACTER DESCRIPTION: Invent a highly detailed physical description for them (e.g. "A 20-year-old Indian boy named Rohan with short messy black hair, wearing a white t-shirt and blue denim jacket").
+3. ENFORCE 100% CONTINUITY: You MUST include this EXACT SAME master character description in EVERY SINGLE imagePrompt where the character appears. NEVER change their clothes, hair, or age between scenes!`;
+
     const prompt = `
 You are an EXPERT AI Storyboard Director and Master Prompt Engineer for Stable Diffusion.
 I will give you a story script in Hindi. 
 Your ONLY job is to take the script and logically divide it into engaging VISUAL SCENES. 
 Do not just split it sentence by sentence! Group related sentences together if they describe the same location, action, or visual moment. Each scene should represent a single camera shot or visual environment.
-CRITICAL INSTRUCTIONS FOR IMAGE PROMPTS:
-1. IDENTIFY THE PROTAGONIST FIRST: Read the whole script first. Identify the main character(s).
-2. CREATE A MASTER CHARACTER DESCRIPTION: Invent a highly detailed physical description for them (e.g. "A 20-year-old Indian boy named Rohan with short messy black hair, wearing a white t-shirt and blue denim jacket").
-3. ENFORCE 100% CONTINUITY: You MUST include this EXACT SAME master character description in EVERY SINGLE imagePrompt where the character appears. NEVER change their clothes, hair, or age between scenes!
+
+${characterInstructions}
 4. SCENE CONTEXT & BACKGROUND: Read the Hindi sentence carefully. What is happening? Where are they? Describe the action and the background vividly in English. 
    - Poor: "Rohan is standing."
    - Excellent: "The 20-year-old Indian boy named Rohan with short messy black hair wearing a blue denim jacket is standing in the middle of a crowded, sunlit college campus courtyard, looking surprised, cinematic lighting, masterpiece, 8k resolution."
