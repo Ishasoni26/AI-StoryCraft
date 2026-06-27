@@ -1,14 +1,17 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenAI } from '@google/genai';
-
-// Initialize Gemini API
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+import { callOpenAI } from '@/lib/openai';
 
 export async function POST(req: Request) {
   try {
-    const { script, targetLanguage } = await req.json();
+    const { script, targetLanguage, characterProfile, locationProfile } = await req.json();
 
-    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'put_your_free_gemini_key_here') {
+    // Check if any valid AI API key is available
+    const groqKey = process.env.GROQ_API_KEY;
+    const openaiKey = process.env.OPENAI_API_KEY;
+    const hasValidKey = (groqKey && !groqKey.includes('put_your') && !groqKey.includes('your_key_here')) ||
+                        (openaiKey && !openaiKey.includes('put_your') && !openaiKey.includes('your_key_here'));
+    
+    if (!hasValidKey) {
       // Return Mock Data so the user can test the app without an API key
       return NextResponse.json({
         scenes: [
@@ -27,67 +30,95 @@ export async function POST(req: Request) {
         ]
       });
     }
-    
-    const langInstruction = targetLanguage && targetLanguage !== 'Hindi' 
-      ? `\nCRITICAL DUBBING INSTRUCTION: The input script is in Hindi, but you MUST translate the "dialogue" field natively into ${targetLanguage}. Do NOT return Hindi dialogue if ${targetLanguage} is requested.`
+
+    if (!script) {
+      return NextResponse.json({ error: 'Script is required' }, { status: 400 });
+    }
+
+    const langInstruction = targetLanguage
+      ? `Ensure all dialogue text is written exclusively in ${targetLanguage}.`
       : '';
 
-    const prompt = `
-You are an EXPERT AI Storyboard Director and Master Prompt Engineer for Stable Diffusion.
-I will give you a story script in Hindi. 
-Your ONLY job is to take the script and logically divide it into engaging VISUAL SCENES. 
-Do not just split it sentence by sentence! Group related sentences together if they describe the same location, action, or visual moment. Each scene should represent a single camera shot or visual environment.
-CRITICAL INSTRUCTIONS FOR IMAGE PROMPTS:
-1. IDENTIFY THE PROTAGONIST FIRST: Read the whole script first. Identify the main character(s).
-2. CREATE A MASTER CHARACTER DESCRIPTION: Invent a highly detailed physical description for them (e.g. "A 20-year-old Indian boy named Rohan with short messy black hair, wearing a white t-shirt and blue denim jacket").
-3. ENFORCE 100% CONTINUITY: You MUST include this EXACT SAME master character description in EVERY SINGLE imagePrompt where the character appears. NEVER change their clothes, hair, or age between scenes!
-4. SCENE CONTEXT & BACKGROUND: Read the Hindi sentence carefully. What is happening? Where are they? Describe the action and the background vividly in English. 
-   - Poor: "Rohan is standing."
-   - Excellent: "The 20-year-old Indian boy named Rohan with short messy black hair wearing a blue denim jacket is standing in the middle of a crowded, sunlit college campus courtyard, looking surprised, cinematic lighting, masterpiece, 8k resolution."
-5. Write ALL imagePrompts in highly detailed, comma-separated English format optimized for AI image generators.
-${langInstruction}
+    const charInstruction = characterProfile
+      ? `CHARACTER PROFILE (USE VERBATIM): "${characterProfile}". You MUST start every image prompt with this exact character description. Do not invent or summarize a new character.`
+      : `CREATE A MASTER CHARACTER DESCRIPTION: Invent a highly detailed physical description (e.g., "A 20-year-old Indian boy named Rohan with short messy black hair, wearing a white t-shirt and blue denim jacket"). Use this consistently in every image prompt.`;
 
-For each scene, provide:
-1. "imagePrompt": The highly detailed, continuous English prompt as instructed above.
-2. "dialogue": The exact text of that SINGLE short sentence (translated to ${targetLanguage || 'Hindi'} as instructed above).
+    const locInstruction = locationProfile
+      ? `LOCATION PROFILE (USE VERBATIM): "${locationProfile}". If a scene takes place in this location, you MUST include this exact location description in the image prompt.`
+      : `VISUAL STYLE: Use a highly detailed, dramatic, cinematic visual style for all scene descriptions.`;
 
-Return the result STRICTLY as a JSON array of objects. Do not include markdown formatting or backticks around the JSON.
-Example format:
-[
-  { "imagePrompt": "A 20-year-old Indian boy named Rohan with short messy black hair wearing a blue denim jacket, standing in front of a grand college building, holding books, cinematic lighting", "dialogue": "रोहन एक साधारण कॉलेज छात्र था।" },
-  { "imagePrompt": "A 20-year-old Indian boy named Rohan with short messy black hair wearing a blue denim jacket, sitting alone on a park bench looking sad, cinematic lighting", "dialogue": "लेकिन वह हमेशा उदास रहता था।" }
-]
+    const systemPrompt = `You are an EXPERT AI Storyboard Director and Narrative Analyst.
 
-Story Script:
-${script}
-    `;
+You will receive a complete story script. Your job is:
+1. First, UNDERSTAND the full story deeply
+2. Then, create a PERFECT image prompt for EACH SENTENCE of the story
 
-    let responseText;
+== PHASE 1: UNDERSTAND THE STORY (think internally, do NOT output this) ==
+- Read the ENTIRE story from start to end
+- Understand: Who are the characters? What is happening? What is the mood?
+- Understand the setting, time, emotions, and visual environment of EACH moment
+- Think about what would make each moment look AMAZING as an image
+
+== PHASE 2: CREATE SCENE FOR EACH LINE ==
+Now, split the story into individual sentences/lines. For EACH line, create a scene with:
+- A highly detailed, context-aware image prompt that reflects what is ACTUALLY happening in that specific moment of the story
+- The exact original text as the dialogue
+
+CRITICAL RULES:
+- EACH SENTENCE gets its own scene — one line = one scene
+- Split by Hindi full stops (।), English full stops (.), or line breaks
+- The image prompt must reflect the SPECIFIC moment — not generic descriptions
+- Because you understood the FULL STORY first, each image prompt should show the correct emotion, setting, and action for that exact point in the narrative
+- Even though each line is separate, the image prompts should feel like a CONTINUOUS VISUAL STORY
+
+IMAGE PROMPT RULES:
+1. ${charInstruction}
+2. ${locInstruction}
+3. Each imagePrompt must be highly detailed, comma-separated English, optimized for AI image generators
+4. Include: character description, specific action/emotion for THIS moment, the correct setting/location for THIS part of the story, cinematic lighting, masterpiece, 8k resolution
+5. The emotion and body language in the prompt must match what is happening in that specific line
+6. ${langInstruction}
+
+THUMBNAIL RULES:
+- Also include a "thumbnailPrompt" — the MOST DRAMATIC, CLICKBAIT-WORTHY moment from the story
+- Include: character with EXTREME facial expression (shocked, terrified, amazed), dramatic element, Pixar 3D style, YouTube thumbnail composition, close-up, vibrant colors
+
+OUTPUT FORMAT:
+Return ONLY a raw JSON object (no markdown, no explanation):
+{
+  "thumbnailPrompt": "dramatic YouTube thumbnail description...",
+  "scenes": [
+    { "imagePrompt": "detailed context-aware description for this specific moment...", "dialogue": "exact original line from story" },
+    ...
+  ]
+}`;
+
+    const userMessage = `Here is the story script to analyze and divide into scenes:\n\n"""\n${script}\n"""`;
+
+    let responseText: string;
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      // 30-second timeout via AbortController
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+      responseText = await callOpenAI(
         {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.7,
-            }
-          })
-        }
+          model: 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage }
+          ],
+          temperature: 0.7,
+          max_tokens: 4096
+        },
+        controller.signal
       );
 
-      if (!response.ok) {
-        throw new Error(`Gemini API HTTP Error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-    } catch (apiError: any) {
-      console.warn("Gemini API failed, using Local Fallback Splitter:", apiError.message);
-      
+      clearTimeout(timeoutId);
+    } catch (apiError: unknown) {
+      const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
+      console.warn("OpenAI API failed, using Local Fallback Splitter:", errorMessage);
+
       // Local Fallback: Split the user's script manually into sentences
       // Split by Hindi full stop (।), English full stop (.), or newlines
       const fallbackScenes = script
@@ -111,20 +142,28 @@ ${script}
       });
     }
 
-    const text = responseText;
-    if (!text) {
-      throw new Error('Empty response from Gemini');
+    if (!responseText) {
+      throw new Error('Empty response from OpenAI');
     }
-    
-    // Clean up any potential markdown block from Gemini
-    const cleanedText = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-    const scenes = JSON.parse(cleanedText);
 
-    return NextResponse.json({ scenes });
-  } catch (error: any) {
-    console.error('Error generating script:', error);
+    // Strip markdown code fences if present
+    const cleanedText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanedText);
+
+    // Handle both formats: new format { thumbnailPrompt, scenes } or legacy array format
+    if (Array.isArray(parsed)) {
+      return NextResponse.json({ scenes: parsed });
+    }
+
+    return NextResponse.json({
+      thumbnailPrompt: parsed.thumbnailPrompt || null,
+      scenes: parsed.scenes || parsed
+    });
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('Error generating script:', errorMessage);
     return NextResponse.json(
-      { error: 'Failed to generate scenes', details: error.message },
+      { error: 'Failed to generate scenes', details: errorMessage },
       { status: 500 }
     );
   }

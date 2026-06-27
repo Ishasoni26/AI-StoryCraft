@@ -21,30 +21,59 @@ export async function POST(req: Request) {
     const encodedPrompt = encodeURIComponent(`Masterpiece, best quality, ${visualStyle}, ${prompt}`);
     const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${seed}`;
 
-    const response = await fetch(imageApiUrl);
+    // Retry logic — up to 3 attempts with increasing delay
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout per attempt
 
-    if (!response.ok) {
-        throw new Error(`Pollinations Backend Error: ${response.status}`);
+        const response = await fetch(imageApiUrl, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          // If rate limited (429) or server error (5xx), retry after delay
+          if ((response.status === 429 || response.status >= 500) && attempt < 3) {
+            const delay = attempt * 3000; // 3s, 6s
+            console.warn(`Pollinations attempt ${attempt} failed (${response.status}), retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            continue;
+          }
+          throw new Error(`Pollinations Backend Error: ${response.status}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        
+        // Return the raw image stream directly
+        return new Response(arrayBuffer, {
+          headers: {
+            'Content-Type': response.headers.get('content-type') || 'image/jpeg',
+          },
+        });
+      } catch (e: any) {
+        lastError = e;
+        if (e.name === 'AbortError') {
+          console.warn(`Pollinations attempt ${attempt} timed out`);
+        }
+        if (attempt < 3) {
+          const delay = attempt * 3000;
+          console.warn(`Pollinations attempt ${attempt} failed, retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    
-    // Return the raw image stream directly instead of large base64 JSON
-    return new Response(arrayBuffer, {
-      headers: {
-        'Content-Type': response.headers.get('content-type') || 'image/jpeg',
-      },
-    });
+    // All retries exhausted — return error instead of placeholder
+    console.error('All image generation attempts failed:', lastError?.message);
+    return NextResponse.json(
+      { error: 'Image generation failed after 3 attempts', details: lastError?.message || 'Unknown error' },
+      { status: 503 }
+    );
   } catch (error: any) {
     console.error('Error generating proxy image:', error);
-    
-    try {
-      const fallbackUrl = 'https://placehold.co/800x600/png?text=Image+API+Busy';
-      const fallbackRes = await fetch(fallbackUrl);
-      const fallbackBuffer = await fallbackRes.arrayBuffer();
-      return new Response(fallbackBuffer, { headers: { 'Content-Type': 'image/png' } });
-    } catch (fallbackError) {
-      return NextResponse.json({ error: 'Fallback failed' }, { status: 500 });
-    }
+    return NextResponse.json(
+      { error: 'Image generation failed', details: error.message },
+      { status: 500 }
+    );
   }
 }

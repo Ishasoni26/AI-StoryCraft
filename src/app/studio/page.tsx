@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Wand2, Play, Sparkles, Video, Pause, AlertCircle, Download, Loader2, Edit3, ChevronRight, CheckCircle2, Image as ImageIcon, Globe, Mail, Link, XCircle, MessageSquare, Mic, Scissors, Zap, Music, Smartphone, Settings, PenTool, Volume2, Type, FileText } from 'lucide-react';
+import { Wand2, Play, Sparkles, Video, Pause, AlertCircle, Download, Loader2, Edit3, ChevronRight, ChevronDown, ChevronUp, CheckCircle2, Image as ImageIcon, Globe, Mail, Link, XCircle, MessageSquare, Mic, Scissors, Zap, Music, Smartphone, Settings, PenTool, Volume2, Type, FileText, Upload, Trash2, Plus } from 'lucide-react';
 
 import Nav from '../../components/Nav';
 
@@ -32,17 +32,139 @@ const BGM_TRACKS = [
 
 const LANGUAGES = ["Hindi", "English", "Spanish", "German"];
 
+const drawThumbnailText = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number, dialogue: string, part: string, isPortrait: boolean) => {
+    // dialogue format: "StoryTitle - PartTitle, Part X" or "StoryTitle, Part X"
+    // Parse the parts
+    let storyName = dialogue;
+    let partTitle = '';
+    let partNum = part || 'PART 1';
+
+    // Extract part number from dialogue if present (e.g., ", Part 1" or ", Part-1")
+    const partMatch = dialogue.match(/,\s*(Part[\s-]?\d+)/i);
+    if (partMatch) {
+      partNum = partMatch[1].replace(/[\s-]/, ' ').toUpperCase();
+      storyName = dialogue.replace(/,\s*Part[\s-]?\d+/i, '').trim();
+    }
+
+    // Extract part title if present (after " - ")
+    const titleMatch = storyName.match(/^(.+?)\s*-\s*(.+)$/);
+    if (titleMatch) {
+      storyName = titleMatch[1].trim();
+      partTitle = titleMatch[2].trim();
+    }
+
+    // Dark gradient overlay on left side for text readability
+    const gradient = isPortrait 
+        ? ctx.createLinearGradient(0, 0, 0, canvasHeight * 0.6)
+        : ctx.createLinearGradient(0, 0, canvasWidth * 0.65, 0);
+        
+    gradient.addColorStop(0, "rgba(0,0,0,0.92)");
+    gradient.addColorStop(0.6, "rgba(0,0,0,0.6)");
+    gradient.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    const leftMargin = isPortrait ? canvasWidth / 2 : 60;
+    ctx.textAlign = isPortrait ? "center" : "left";
+
+    // === PART NUMBER — Red pill badge, top-left ===
+    const pillW = 180;
+    const pillH = 50;
+    const pillX = isPortrait ? (canvasWidth - pillW) / 2 : leftMargin;
+    const pillY = isPortrait ? 60 : 40;
+
+    ctx.fillStyle = "#FF3B30";
+    ctx.beginPath();
+    ctx.roundRect(pillX, pillY, pillW, pillH, 25);
+    ctx.fill();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 28px 'Arial Black', Impact, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(partNum.toUpperCase(), pillX + pillW / 2, pillY + pillH / 2);
+
+    // === STORY TITLE — Large white text with golden glow ===
+    ctx.textAlign = isPortrait ? "center" : "left";
+    ctx.textBaseline = "top";
+    const titleFontSize = isPortrait ? 70 : 90;
+    const titleY = isPortrait ? 140 : 120;
+
+    ctx.font = `900 ${titleFontSize}px 'Arial Black', Impact, sans-serif`;
+    
+    // Black stroke for readability
+    ctx.lineWidth = 12;
+    ctx.strokeStyle = "black";
+    ctx.strokeText(storyName, leftMargin, titleY);
+    
+    // Golden glow
+    ctx.shadowColor = "rgba(255, 213, 79, 0.6)";
+    ctx.shadowBlur = 20;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    
+    // White fill
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(storyName, leftMargin, titleY);
+    ctx.shadowColor = "transparent";
+
+    // === PART TITLE — Black pill container with golden text ===
+    if (partTitle) {
+      const ptFontSize = isPortrait ? 36 : 42;
+      ctx.font = `bold ${ptFontSize}px 'Arial Black', sans-serif`;
+      const ptTextWidth = ctx.measureText(partTitle).width;
+      const ptPillW = ptTextWidth + 50;
+      const ptPillH = isPortrait ? 55 : 60;
+      const ptY = titleY + titleFontSize + 30;
+      const ptX = isPortrait ? (canvasWidth - ptPillW) / 2 : leftMargin;
+
+      // Black pill background
+      ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+      ctx.beginPath();
+      ctx.roundRect(ptX, ptY, ptPillW, ptPillH, 30);
+      ctx.fill();
+
+      // Golden border
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#FFD54F";
+      ctx.beginPath();
+      ctx.roundRect(ptX, ptY, ptPillW, ptPillH, 30);
+      ctx.stroke();
+
+      // Golden text
+      ctx.fillStyle = "#FFD54F";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(partTitle, ptX + ptPillW / 2, ptY + ptPillH / 2);
+    }
+
+    // === BOTTOM — "Hindi Story" branding ===
+    const brandY = canvasHeight - (isPortrait ? 80 : 60);
+    const brandX = isPortrait ? canvasWidth / 2 : leftMargin;
+    ctx.textAlign = isPortrait ? "center" : "left";
+    ctx.textBaseline = "middle";
+    
+    ctx.font = "italic 24px Georgia, serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+    ctx.fillText("✨ Hindi Story", brandX, brandY);
+};
+
 export default function Home() {
-  const [storyTitle, setStoryTitle] = useState('जादुई चप्पल');
-  const [storyPart, setStoryPart] = useState('Part 1');
-  const [script, setScript] = useState('एक छोटे से गाँव में मोहन नाम का एक गरीब लड़का रहता था। वह अपनी बूढ़ी माँ के साथ एक टूटी-फूटी झोपड़ी में रहता था...');
+  const [storyTitle, setStoryTitle] = useState('');
+  const [storyPart, setStoryPart] = useState('');
+  const [partTitle, setPartTitle] = useState('');
+  const [script, setScript] = useState('');
   const [visualStyle, setVisualStyle] = useState(VISUAL_STYLES[0]);
   const [bgmTrack, setBgmTrack] = useState(BGM_TRACKS[0].url);
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
   const [targetLanguage, setTargetLanguage] = useState(LANGUAGES[0]);
+  const [characterProfile, setCharacterProfile] = useState('A young Indian boy with big expressive eyes, brown hair, wearing a simple brown shirt and a sling bag strap');
+  const [locationProfile, setLocationProfile] = useState('A creepy 19th-century Victorian bungalow with broken windows and a red roof');
+  const [globalSeed, setGlobalSeed] = useState(42);
   const [idea, setIdea] = useState('');
   const [isBrainstorming, setIsBrainstorming] = useState(false);
   const [activeTab, setActiveTab] = useState<'script' | 'settings'>('script');
+  const [isUniverseOpen, setIsUniverseOpen] = useState(false);
   
   const [bgmVolume, setBgmVolume] = useState(15);
   const [voiceVolume, setVoiceVolume] = useState(100);
@@ -53,6 +175,7 @@ export default function Home() {
   const [storyboardScenes, setStoryboardScenes] = useState<Scene[]>([]);
 
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
+  const [generatingImageIdx, setGeneratingImageIdx] = useState<number | null>(null);
   const [status, setStatus] = useState('Idle');
   const [progress, setProgress] = useState(0);
 
@@ -100,6 +223,31 @@ export default function Home() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  const handleSaveSeries = () => {
+    const universe = {
+      characterProfile,
+      locationProfile,
+      visualStyle,
+      globalSeed
+    };
+    localStorage.setItem('storyUniverse', JSON.stringify(universe));
+    showToast("Series Settings Saved! You can load them for Part 2.");
+  };
+
+  const handleLoadSeries = () => {
+    const saved = localStorage.getItem('storyUniverse');
+    if (saved) {
+      const universe = JSON.parse(saved);
+      if (universe.characterProfile) setCharacterProfile(universe.characterProfile);
+      if (universe.locationProfile) setLocationProfile(universe.locationProfile);
+      if (universe.visualStyle) setVisualStyle(universe.visualStyle);
+      if (universe.globalSeed) setGlobalSeed(universe.globalSeed);
+      showToast("Series Settings Loaded! Ready for the next part.");
+    } else {
+      showToast("No saved series found.");
+    }
+  };
+
   const handleBrainstorm = async () => {
     if (!idea) return;
     setIsBrainstorming(true);
@@ -108,7 +256,7 @@ export default function Home() {
       const res = await fetch('/api/brainstorm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea })
+        body: JSON.stringify({ idea, characterProfile, locationProfile })
       });
       const data = await res.json();
       if (res.ok && data.script) {
@@ -125,6 +273,55 @@ export default function Home() {
     }
   };
 
+  // Generate the fixed thumbnail prompt template — only story name, part, part title change
+  const getThumbnailPrompt = () => {
+    const charDescription = characterProfile 
+      ? `On the right side, ${characterProfile}, holding or interacting with the KEY OBJECT from the story title "${storyTitle}". The key object must be PROMINENTLY VISIBLE and GLOWING.`
+      : '';
+    
+    // Extract the key object/concept from story title for the image
+    const storyObject = storyTitle.trim();
+    
+    return `Cinematic YouTube thumbnail background image in 16:9 (1280x720). Dark, mysterious, high-contrast fantasy setting with dramatic volumetric lighting. 
+
+MOST IMPORTANT: The story is called "${storyObject}" — the KEY OBJECT/CONCEPT from this title MUST be prominently visible and glowing in the image. For example if the title mentions "पेन" (pen), show a magical glowing pen. If it mentions "किताब" (book), show a mystical glowing book. The title object should be the visual HERO of the thumbnail.
+
+${charDescription}
+
+The character should have a dramatic expression (shocked, curious, or amazed) while looking at or holding the key story object. Mysterious blue/golden magical particles floating around. Fantasy atmosphere, cinematic rim lighting, dark moody background with magical glow. Leave the LEFT SIDE relatively empty/dark for text overlay space.
+
+Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube thumbnail composition, 8k, masterpiece. The key story object must be UNMISSABLE in the image.`;
+  };
+
+  // Save/Load thumbnail base from localStorage for consistent series look
+  const saveThumbnailForSeries = (prompt: string) => {
+    if (!storyTitle.trim()) return;
+    const thumbnailData = {
+      basePrompt: prompt,
+      characterProfile,
+      storyTitle: storyTitle.trim()
+    };
+    localStorage.setItem(`thumbnail_${storyTitle.trim()}`, JSON.stringify(thumbnailData));
+  };
+
+  const loadThumbnailForSeries = (): string | null => {
+    if (!storyTitle.trim()) return null;
+    const saved = localStorage.getItem(`thumbnail_${storyTitle.trim()}`);
+    if (!saved) return null;
+    try {
+      const data = JSON.parse(saved);
+      // Same story title — reuse the base prompt but update part number and part title
+      if (data.storyTitle === storyTitle.trim()) {
+        // Rebuild with updated part info
+        return data.basePrompt
+          .replace(/\"PART \d+\"/g, `"${storyPart || 'PART 1'}"`)
+          .replace(/pill badge with white bold text \"[^"]*\"/g, `pill badge with white bold text "${storyPart || 'PART 1'}"`)
+          .replace(/Below it medium golden yellow \(#FFD54F\) subtitle \"[^"]*\"/g, `Below it medium golden yellow (#FFD54F) subtitle "${partTitle}"`);
+      }
+    } catch { /* ignore parse errors */ }
+    return null;
+  };
+
   const handleGenerateStoryboard = async () => {
     if (!script.trim()) return;
     setIsGeneratingStoryboard(true);
@@ -135,20 +332,35 @@ export default function Home() {
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
-        body: JSON.stringify({ script, targetLanguage }),
+        body: JSON.stringify({ script, targetLanguage, characterProfile, locationProfile }),
         headers: { 'Content-Type': 'application/json' }
       });
       const data = await res.json();
       
       if (!res.ok) throw new Error(data.error || 'Failed to generate scenes');
       
+      // Check if we have a saved thumbnail for this story series
+      let thumbnailPrompt = loadThumbnailForSeries();
+      
+      if (!thumbnailPrompt) {
+        // First time for this story — generate and save the template
+        thumbnailPrompt = getThumbnailPrompt();
+        saveThumbnailForSeries(thumbnailPrompt);
+      }
+
       const thumbnailScene: Scene = {
         isThumbnail: true,
-        imagePrompt: `A highly detailed cinematic movie poster background without text. Show the main subject doing an action based on this story: ${script.slice(0, 150)}...`,
-        dialogue: `${storyTitle}, ${storyPart}`
+        imagePrompt: thumbnailPrompt,
+        dialogue: `${storyTitle}${partTitle ? ' - ' + partTitle : ''}${storyPart ? ', ' + storyPart : ''}`
       };
       
-      setStoryboardScenes([thumbnailScene, ...data.scenes]);
+      // Outro CTA scene — like, subscribe, bell icon
+      const outroScene: Scene = {
+        imagePrompt: `Dark cinematic background with glowing Subscribe button, bell notification icon, thumbs up like icon, and "Next Part Coming Soon" text. YouTube end screen style, vibrant red subscribe button, golden bell icon glowing, modern clean design, dark gradient background with magical particles, professional YouTube outro card, 8k, masterpiece.`,
+        dialogue: `अगर यह कहानी पसंद आई तो Like करें, Subscribe करें, और Bell icon 🔔 जरूर दबाएं ताकि अगला part आते ही notification मिल जाए! अगला part जल्दी आ रहा है...`
+      };
+
+      setStoryboardScenes([thumbnailScene, ...data.scenes, outroScene]);
       setIsStoryboardMode(true);
       showToast("Storyboard Generated! Review and Edit.");
     } catch (err: any) {
@@ -163,6 +375,110 @@ export default function Home() {
     const newScenes = [...storyboardScenes];
     newScenes[index][field] = value;
     setStoryboardScenes(newScenes);
+  };
+
+  const handleAddScene = (afterIndex: number) => {
+    const newScene: Scene = {
+      imagePrompt: '',
+      dialogue: '',
+    };
+    const newScenes = [...storyboardScenes];
+    newScenes.splice(afterIndex + 1, 0, newScene);
+    setStoryboardScenes(newScenes);
+    showToast(`New scene added after ${afterIndex === 0 && storyboardScenes[0]?.isThumbnail ? 'Thumbnail' : `Scene ${afterIndex + 1}`}`);
+  };
+
+  const handleDeleteScene = (index: number) => {
+    if (storyboardScenes[index]?.isThumbnail) {
+      showToast("Cannot delete thumbnail scene");
+      return;
+    }
+    const newScenes = storyboardScenes.filter((_, i) => i !== index);
+    setStoryboardScenes(newScenes);
+    showToast(`Scene ${index + 1} deleted`);
+  };
+
+  const handleImageUpload = (index: number, event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const objectUrl = URL.createObjectURL(file);
+      const newScenes = [...storyboardScenes];
+      newScenes[index] = {
+        ...newScenes[index],
+        imageUrl: objectUrl
+      };
+      setStoryboardScenes(newScenes);
+      showToast("Custom image uploaded for Scene " + (index + 1));
+    }
+  };
+
+  const handleRemoveImage = (index: number) => {
+    const newScenes = [...storyboardScenes];
+    delete newScenes[index].imageUrl;
+    setStoryboardScenes(newScenes);
+    showToast("Reverted Scene " + (index + 1) + " back to AI generation.");
+  };
+
+  const handleDownloadThumbnailImage = (index: number) => {
+    const scene = storyboardScenes[index];
+    if (!scene.imageUrl) return;
+    
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const cvs = document.createElement('canvas');
+      cvs.width = aspectRatio === '9:16' ? 576 : 1024;
+      cvs.height = aspectRatio === '9:16' ? 1024 : 576;
+      const ctx = cvs.getContext('2d');
+      if (!ctx) return;
+      
+      // Draw image
+      ctx.drawImage(img, 0, 0, cvs.width, cvs.height);
+      
+      // Draw gradient and text just like video export
+      drawThumbnailText(ctx, cvs.width, cvs.height, scene.dialogue, storyPart, aspectRatio === '9:16');
+      
+      const link = document.createElement('a');
+      link.download = `Thumbnail_${storyTitle}.png`;
+      link.href = cvs.toDataURL("image/png");
+      link.click();
+      showToast("Thumbnail downloaded successfully!");
+    };
+    img.src = scene.imageUrl;
+  };
+
+  const handleGenerateSingleImage = async (index: number) => {
+    const scene = storyboardScenes[index];
+    if (!scene.imagePrompt) return;
+    
+    setGeneratingImageIdx(index);
+    
+    try {
+      const imgRes = await fetch('/api/image', {
+        method: 'POST',
+        body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio, seed: globalSeed }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      if (!imgRes.ok) throw new Error('Image generation failed');
+      
+      const blob = await imgRes.blob();
+      if (blob) {
+        const objectUrl = URL.createObjectURL(blob);
+        const newScenes = [...storyboardScenes];
+        newScenes[index] = {
+          ...newScenes[index],
+          imageUrl: objectUrl
+        };
+        setStoryboardScenes(newScenes);
+        showToast("Image generated! This will be used in the final video.");
+      }
+    } catch (e: any) {
+      console.error(e);
+      showToast("Error generating image: " + e.message);
+    } finally {
+      setGeneratingImageIdx(null);
+    }
   };
 
   const handleGenerateVideo = async () => {
@@ -187,12 +503,16 @@ export default function Home() {
           let imageUrl: string | undefined = undefined;
           let audioUrl: string | undefined = undefined;
           
+          const skipImageGen = !!scene.imageUrl;
+          
           const [imgRes, audioRes] = await Promise.all([
-              fetch('/api/image', {
-                  method: 'POST',
-                  body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio }),
-                  headers: { 'Content-Type': 'application/json' }
-              }).catch(e => ({ ok: false, statusText: e.message, blob: async () => null })),
+              skipImageGen
+                ? Promise.resolve({ ok: true })
+                : fetch('/api/image', {
+                    method: 'POST',
+                    body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio }),
+                    headers: { 'Content-Type': 'application/json' }
+                }).catch(e => ({ ok: false, statusText: e.message, blob: async () => null })),
               fetch('/api/tts', {
                   method: 'POST',
                   body: JSON.stringify({ text: scene.dialogue }),
@@ -200,10 +520,13 @@ export default function Home() {
               }).catch(e => ({ ok: false, json: async () => ({}) }))
           ]);
 
-          if (imgRes.ok) {
+          if (skipImageGen) {
+             imageUrl = scene.imageUrl;
+          } else if (imgRes.ok) {
              const blob = await (imgRes as any).blob();
              if (blob) imageUrl = URL.createObjectURL(blob);
           }
+          
           if (audioRes.ok) {
              const audioData = await (audioRes as any).json();
              if (audioData.audioUrl) audioUrl = audioData.audioUrl;
@@ -216,9 +539,9 @@ export default function Home() {
           setProgress(currentProgress);
           setStatus(`Generating Scene ${completed} of ${totalScenes} (${currentProgress}%)`);
           
-          if (completed < totalScenes) {
-              // Wait 1.5 seconds before asking for the next image to prevent Rate Limiting
-              await new Promise(resolve => setTimeout(resolve, 1500));
+          if (completed < totalScenes && !skipImageGen) {
+              // Wait 3 seconds before asking for the next image to prevent Rate Limiting
+              await new Promise(resolve => setTimeout(resolve, 3000));
           }
       }
       
@@ -399,7 +722,9 @@ export default function Home() {
         const loadedImages = await Promise.all(scenes.map(s => {
             return new Promise<HTMLImageElement>((resolve) => {
                 const img = new Image();
-                img.crossOrigin = "anonymous";
+                if (s.imageUrl && !s.imageUrl.startsWith('blob:') && !s.imageUrl.startsWith('data:')) {
+                    img.crossOrigin = "anonymous";
+                }
                 img.src = s.imageUrl || '';
                 img.onload = () => resolve(img);
                 img.onerror = () => resolve(img);
@@ -459,28 +784,7 @@ export default function Home() {
 
             if (scene) {
                 if (scene.isThumbnail) {
-                    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-                    gradient.addColorStop(0, "rgba(0,0,0,0.8)");
-                    gradient.addColorStop(0.5, "rgba(0,0,0,0.4)");
-                    gradient.addColorStop(1, "rgba(0,0,0,0.8)");
-                    ctx.fillStyle = gradient;
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-                    ctx.textAlign = "center";
-                    ctx.shadowColor = "black";
-                    ctx.shadowBlur = 8;
-                    
-                    ctx.fillStyle = "#fbbf24"; 
-                    ctx.font = "bold 28px Arial";
-                    ctx.fillText("हिंदी रहस्यमयी कहानी", canvas.width / 2, 120);
-
-                    ctx.fillStyle = "white";
-                    ctx.font = "bold 48px Arial";
-                    ctx.fillText(storyTitle, canvas.width / 2, canvas.height / 2);
-
-                    ctx.fillStyle = "#ef4444";
-                    ctx.font = "bold 28px Arial";
-                    ctx.fillText(storyPart, canvas.width / 2, canvas.height - 120);
+                    drawThumbnailText(ctx, canvas.width, canvas.height, scene.dialogue, storyPart, aspectRatio === '9:16');
                 } else if (subtitleStyle !== 'none') {
                     const elapsed = Date.now() - exportSceneStartMs;
                     const words = scene.dialogue.split(' ');
@@ -674,7 +978,7 @@ export default function Home() {
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -10 }}
-                          className="grid grid-cols-1 sm:grid-cols-2 gap-6"
+                          className="grid grid-cols-1 sm:grid-cols-2 gap-6 overflow-y-auto pr-2 custom-scrollbar"
                         >
                           <div className="flex flex-col space-y-2">
                             <label className="text-sm font-medium flex items-center space-x-2 text-slate-300">
@@ -764,6 +1068,7 @@ export default function Home() {
                               <option value="none">None (Hide Subtitles)</option>
                             </select>
                           </div>
+                          {/* Character profile moved to Script & Idea tab */}
                         </motion.div>
                       )}
 
@@ -773,58 +1078,137 @@ export default function Home() {
                           initial={{ opacity: 0, y: 10 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -10 }}
-                          className="flex flex-col flex-1 min-h-0 space-y-4"
+                          className="flex flex-col flex-1 min-h-0 space-y-4 overflow-y-auto pr-2 custom-scrollbar"
                         >
                           {/* Brainstorm Engine */}
-                          <div className="flex items-center space-x-4 bg-indigo-500/10 border border-indigo-500/30 p-4 rounded-xl">
-                            <div className="flex-1 flex flex-col justify-center">
-                              <label className="text-sm font-medium flex items-center space-x-2 text-indigo-300 mb-2">
-                                <Zap className="w-4 h-4" />
-                                <span>Magic Brainstorm</span>
-                              </label>
-                              <input
-                                type="text"
-                                value={idea}
-                                onChange={(e) => setIdea(e.target.value)}
-                                placeholder="Type an idea (e.g. A dog who went to space)"
-                                className="w-full bg-slate-900/80 rounded-lg px-4 py-2 outline-none text-sm text-slate-200 placeholder:text-slate-500 border border-transparent focus:border-indigo-500 transition-colors"
-                              />
-                            </div>
-                            <button
-                              onClick={handleBrainstorm}
-                              disabled={isBrainstorming || !idea}
-                              className="mt-6 px-6 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-bold text-sm transition-all disabled:opacity-50 flex items-center justify-center space-x-2 min-w-[140px]"
+                          <div className="bg-indigo-900/20 rounded-2xl border border-indigo-500/30 overflow-hidden shrink-0">
+                            {/* Collapsible Header */}
+                            <button 
+                              onClick={() => setIsUniverseOpen(!isUniverseOpen)}
+                              className="w-full flex items-center justify-between p-4 bg-indigo-950/30 hover:bg-indigo-900/40 transition-colors border-b border-indigo-500/20"
                             >
-                              {isBrainstorming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                              <span>Write Script</span>
+                              <div className="flex items-center space-x-2">
+                                <Globe className="w-5 h-5 text-indigo-400" />
+                                <span className="font-bold text-indigo-200">Story Universe Settings</span>
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 ml-2 border border-indigo-500/30">Optional</span>
+                              </div>
+                              {isUniverseOpen ? <ChevronUp className="w-5 h-5 text-indigo-400" /> : <ChevronDown className="w-5 h-5 text-indigo-400" />}
                             </button>
+
+                            {/* Collapsible Content */}
+                            <AnimatePresence>
+                              {isUniverseOpen && (
+                                <motion.div 
+                                  initial={{ height: 0, opacity: 0 }}
+                                  animate={{ height: "auto", opacity: 1 }}
+                                  exit={{ height: 0, opacity: 0 }}
+                                  className="px-5 py-4 space-y-4 border-b border-indigo-500/30 bg-slate-950/20"
+                                >
+                                  <div className="flex flex-col space-y-2">
+                                    <label className="text-sm font-bold flex items-center space-x-2 text-indigo-300">
+                                      <ImageIcon className="w-4 h-4" />
+                                      <span>Main Characters</span>
+                                    </label>
+                                    <textarea 
+                                      value={characterProfile}
+                                      onChange={(e) => setCharacterProfile(e.target.value)}
+                                      placeholder="Describe your main character here to keep them EXACTLY same in all images... (e.g. A 20yr old Indian boy with messy hair, wearing a white shirt)"
+                                      rows={2}
+                                      className="w-full bg-slate-900/50 border border-indigo-500/50 text-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 resize-none"
+                                    />
+                                  </div>
+
+                                  <div className="flex flex-col space-y-2">
+                                    <label className="text-sm font-bold flex items-center space-x-2 text-indigo-300">
+                                      <Globe className="w-4 h-4" />
+                                      <span>Main Location</span>
+                                    </label>
+                                    <textarea 
+                                      value={locationProfile}
+                                      onChange={(e) => setLocationProfile(e.target.value)}
+                                      placeholder="Describe the environment to keep it consistent... (e.g. A creepy old Victorian bungalow with a red roof)"
+                                      rows={2}
+                                      className="w-full bg-slate-900/50 border border-indigo-500/50 text-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 resize-none"
+                                    />
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center justify-between pt-4 border-t border-indigo-500/20 gap-y-3 gap-x-2">
+                                    <div className="flex items-center space-x-2 text-sm text-slate-300">
+                                      <Settings className="w-4 h-4 text-indigo-400 shrink-0" />
+                                      <span className="font-semibold whitespace-nowrap">Global Seed: </span>
+                                      <input type="number" value={globalSeed} onChange={e => setGlobalSeed(Number(e.target.value))} className="bg-slate-900 border border-indigo-500/50 rounded-lg px-2 py-1.5 w-24 text-center outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20" />
+                                      <button onClick={() => setGlobalSeed(Math.floor(Math.random() * 1000000))} className="bg-slate-800 hover:bg-slate-700 text-indigo-300 rounded-lg p-1.5 transition-colors shrink-0" title="Generate Random Seed">↻</button>
+                                    </div>
+                                    <div className="flex items-center space-x-2">
+                                      <button onClick={handleSaveSeries} className="text-xs font-bold bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-lg transition-all shadow-lg whitespace-nowrap">Save Universe</button>
+                                      <button onClick={handleLoadSeries} className="text-xs font-bold bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 border border-indigo-500/30 px-3 py-1.5 rounded-lg transition-all shadow-lg whitespace-nowrap">Load Universe</button>
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+
+                            {/* Always visible Brainstorm Idea */}
+                            <div className="p-5 flex flex-col space-y-2">
+                              <label className="text-sm font-bold flex items-center space-x-2 text-indigo-300">
+                                <Sparkles className="w-4 h-4" />
+                                <span>Magic Brainstorm Idea</span>
+                              </label>
+                              <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
+                                <input 
+                                  type="text"
+                                  placeholder="E.g., A horror story about a cursed mirror..."
+                                  value={idea}
+                                  onChange={(e) => setIdea(e.target.value)}
+                                  className="flex-1 bg-slate-900/50 border border-indigo-500/50 text-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
+                                  onKeyDown={(e) => e.key === 'Enter' && handleBrainstorm()}
+                                />
+                                <button 
+                                  onClick={handleBrainstorm}
+                                  disabled={isBrainstorming || !idea}
+                                  className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold px-6 py-3 rounded-xl transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] disabled:shadow-none flex items-center justify-center space-x-2 whitespace-nowrap"
+                                >
+                                  {isBrainstorming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                                  <span>Generate Script</span>
+                                </button>
+                              </div>
+                            </div>
                           </div>
 
-                          <div className="flex space-x-4">
+                          <div className="flex flex-col space-y-3 shrink-0">
                             <input
                               type="text"
                               value={storyTitle}
                               onChange={(e) => setStoryTitle(e.target.value)}
-                              placeholder="Story Title (e.g. रहस्यमयी गुफा)"
-                              className="w-2/3 bg-slate-950/50 rounded-xl px-4 py-3 outline-none text-md font-medium text-slate-200 placeholder:text-slate-600 border border-transparent focus:border-indigo-500/30 transition-colors"
+                              placeholder="Story Name (e.g. जादुई चप्पल)"
+                              className="w-full bg-slate-950/50 rounded-xl px-4 py-3 outline-none text-md font-medium text-slate-200 placeholder:text-slate-600 border border-transparent focus:border-indigo-500/30 transition-colors"
                             />
-                            <input
-                              type="text"
-                              value={storyPart}
-                              onChange={(e) => setStoryPart(e.target.value)}
-                              placeholder="Part 1"
-                              className="w-1/3 bg-slate-950/50 rounded-xl px-4 py-3 outline-none text-md font-medium text-slate-200 placeholder:text-slate-600 border border-transparent focus:border-indigo-500/30 transition-colors"
-                            />
+                            <div className="flex space-x-3">
+                              <input
+                                type="text"
+                                value={storyPart}
+                                onChange={(e) => setStoryPart(e.target.value)}
+                                placeholder="Part (e.g. Part 1)"
+                                className="w-1/3 bg-slate-950/50 rounded-xl px-4 py-3 outline-none text-md font-medium text-slate-200 placeholder:text-slate-600 border border-transparent focus:border-indigo-500/30 transition-colors"
+                              />
+                              <input
+                                type="text"
+                                value={partTitle}
+                                onChange={(e) => setPartTitle(e.target.value)}
+                                placeholder="Part Title (e.g. रहस्यमयी शुरुआत)"
+                                className="w-2/3 bg-slate-950/50 rounded-xl px-4 py-3 outline-none text-md font-medium text-slate-200 placeholder:text-slate-600 border border-transparent focus:border-indigo-500/30 transition-colors"
+                              />
+                            </div>
                           </div>
 
                           <textarea
                             value={script}
                             onChange={(e) => setScript(e.target.value)}
                             placeholder="एक छोटे से गाँव में..."
-                            className="w-full flex-1 bg-slate-950/50 rounded-xl p-4 resize-none outline-none text-lg text-slate-200 placeholder:text-slate-600 custom-scrollbar border border-transparent focus:border-indigo-500/30 transition-colors"
+                            className="w-full flex-1 min-h-[200px] bg-slate-950/50 rounded-xl p-4 resize-none outline-none text-lg text-slate-200 placeholder:text-slate-600 custom-scrollbar border border-transparent focus:border-indigo-500/30 transition-colors"
                           />
                           
-                          <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-800">
+                          <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-800 shrink-0">
                             <span className="text-sm text-slate-500 font-medium">
                               {script.length} characters
                             </span>
@@ -865,9 +1249,47 @@ export default function Home() {
 
                     <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
                       {storyboardScenes.map((scene, idx) => (
-                        <div key={idx} className="bg-slate-950/50 p-4 rounded-xl border border-slate-800 space-y-3">
+                        <div key={idx}>
+                        <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800 space-y-3">
                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-slate-500 bg-slate-900 px-2 py-1 rounded-md">SCENE {idx + 1}</span>
+                              <span className="text-xs font-bold text-slate-500 bg-slate-900 px-2 py-1 rounded-md">{scene.isThumbnail ? 'THUMBNAIL' : `SCENE ${idx + 1}`}</span>
+                              <div className="flex space-x-2">
+                                {!scene.isThumbnail && (
+                                  <button 
+                                    onClick={() => handleDeleteScene(idx)}
+                                    className="text-xs font-bold bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white px-2 py-1 rounded-md transition-colors flex items-center space-x-1"
+                                    title="Delete scene"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                                {scene.isThumbnail && scene.imageUrl && (
+                                  <button 
+                                    onClick={() => handleDownloadThumbnailImage(idx)}
+                                    className="text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white px-3 py-1 rounded-md transition-colors flex items-center space-x-1 shadow-lg"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                    <span>Download</span>
+                                  </button>
+                                )}
+                                <button 
+                                  onClick={() => handleGenerateSingleImage(idx)}
+                                  disabled={generatingImageIdx === idx}
+                                  className="text-xs font-bold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 text-white px-3 py-1 rounded-md transition-colors flex items-center space-x-1 shadow-lg"
+                                >
+                                  {generatingImageIdx === idx ? (
+                                    <>
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      <span>Generating...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Sparkles className="w-3.5 h-3.5" />
+                                      <span>Generate Preview</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
                            </div>
                            <div className="space-y-1">
                               <label className="text-xs text-slate-400 ml-1">Dialogue (Hindi)</label>
@@ -887,6 +1309,77 @@ export default function Home() {
                                 className="w-full bg-slate-800/50 rounded-lg px-3 py-2 text-sm outline-none border border-transparent focus:border-emerald-500/50 resize-none text-slate-200"
                               />
                            </div>
+                           
+                           {/* Custom Image Upload */}
+                           <div className="space-y-1">
+                              <label className="text-xs text-slate-400 ml-1 flex items-center space-x-1">
+                                 <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />
+                                 <span>Custom Image (Optional)</span>
+                              </label>
+                              
+                              {scene.imageUrl ? (
+                                 <div className="relative group/img w-full h-32 rounded-lg overflow-hidden border border-slate-700 bg-slate-900">
+                                    <img 
+                                       src={scene.imageUrl} 
+                                       alt={`Scene ${idx + 1} Custom Image`} 
+                                       className="w-full h-full object-cover"
+                                    />
+                                    {scene.isThumbnail && (
+                                       <div className="absolute inset-0 flex flex-col items-start justify-center p-4 pointer-events-none bg-gradient-to-r from-black/95 via-black/50 to-transparent space-y-1">
+                                          {scene.dialogue.replace(/, Part \d+/i, '').split(' ').slice(0, 5).map((w, i) => (
+                                            <span key={i} className={`text-xl font-black ${i % 2 !== 0 ? 'text-amber-400' : 'text-white'} drop-shadow-[0_3px_3px_rgba(0,0,0,1)] uppercase leading-none`} style={{ WebkitTextStroke: '1.5px black' }}>
+                                              {w}
+                                            </span>
+                                          ))}
+                                          <div className="bg-black px-3 py-1 mt-3 rounded-lg border-2 border-amber-400 shadow-xl">
+                                             <span className="text-xs font-black text-amber-400">{storyPart}</span>
+                                          </div>
+                                       </div>
+                                    )}
+                                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center space-x-3">
+                                       <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg">
+                                          <Upload className="w-3.5 h-3.5" />
+                                          <span>Change</span>
+                                          <input 
+                                             type="file" 
+                                             accept="image/*" 
+                                             className="hidden" 
+                                             onChange={(e) => handleImageUpload(idx, e)}
+                                          />
+                                       </label>
+                                       <button 
+                                          onClick={() => handleRemoveImage(idx)}
+                                          className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg"
+                                       >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                          <span>Remove</span>
+                                       </button>
+                                    </div>
+                                 </div>
+                              ) : (
+                                 <label className="flex flex-col items-center justify-center w-full h-20 border border-dashed border-slate-700 hover:border-emerald-500/50 rounded-lg cursor-pointer bg-slate-900/30 hover:bg-slate-900/50 transition-all group/upload">
+                                    <div className="flex flex-col items-center justify-center space-y-1">
+                                       <Upload className="w-5 h-5 text-slate-500 group-hover/upload:text-emerald-400 transition-colors" />
+                                       <span className="text-xs text-slate-400 group-hover/upload:text-slate-300">Click to upload custom image</span>
+                                    </div>
+                                    <input 
+                                       type="file" 
+                                       accept="image/*" 
+                                       className="hidden" 
+                                       onChange={(e) => handleImageUpload(idx, e)}
+                                    />
+                                 </label>
+                              )}
+                           </div>
+                        </div>
+                        {/* Add Scene button between scenes */}
+                        <button
+                          onClick={() => handleAddScene(idx)}
+                          className="w-full flex items-center justify-center py-2 my-1 text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg border border-dashed border-slate-800 hover:border-emerald-500/50 transition-all group"
+                          title="Add new scene here"
+                        >
+                          <Plus className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                        </button>
                         </div>
                       ))}
                     </div>
@@ -992,15 +1485,26 @@ export default function Home() {
                       className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
                     >
                        {scenes[currentSceneIdx]?.isThumbnail ? (
-                         <div className="absolute inset-0 bg-gradient-to-b from-black/80 via-black/20 to-black/80 flex flex-col items-center justify-between py-16">
-                           <h2 className="text-2xl md:text-3xl font-bold text-amber-400 drop-shadow-2xl">
-                             हिंदी रहस्यमयी कहानी
-                           </h2>
-                           <h1 className="text-4xl md:text-5xl font-extrabold text-white drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] text-center px-6 leading-tight">
-                             {storyTitle}
-                           </h1>
-                           <div className="bg-red-600/90 backdrop-blur-sm px-6 py-2 rounded-full shadow-[0_0_20px_rgba(220,38,38,0.5)] border border-red-400/50">
-                             <span className="text-xl md:text-2xl font-bold text-white drop-shadow-md">
+                         <div className={`absolute inset-0 bg-gradient-to-r from-black/95 via-black/70 to-transparent flex flex-col ${aspectRatio === '9:16' ? 'items-center bg-gradient-to-b' : 'items-start'} justify-center p-12 space-y-4`}>
+                           <div className="flex flex-col space-y-2">
+                             {scenes[currentSceneIdx]?.dialogue.replace(/, Part \d+/i, '').split(' ').filter(Boolean).reduce((acc: string[][], word: string, i: number, arr: string[]) => {
+                                if (arr.length <= 3) acc.push([word]);
+                                else if (arr.length <= 6) {
+                                  if (i % 2 === 0) acc.push([word]);
+                                  else acc[acc.length-1].push(word);
+                                } else {
+                                  if (i % 3 === 0) acc.push([word]);
+                                  else acc[acc.length-1].push(word);
+                                }
+                                return acc;
+                             }, []).map((lineWords, i) => (
+                               <h1 key={i} className={`text-6xl md:text-8xl font-black ${i % 2 !== 0 ? 'text-amber-400' : 'text-white'} drop-shadow-[0_5px_5px_rgba(0,0,0,1)] uppercase tracking-tight`} style={{ WebkitTextStroke: '3px black', lineHeight: '1.1' }}>
+                                 {lineWords.join(' ')}
+                               </h1>
+                             ))}
+                           </div>
+                           <div className="bg-black px-6 py-3 rounded-xl border-4 border-amber-400 shadow-[0_5px_15px_rgba(0,0,0,0.8)] mt-6 inline-block">
+                             <span className="text-2xl md:text-3xl font-black text-amber-400">
                                {storyPart}
                              </span>
                            </div>
