@@ -4,13 +4,14 @@ import { callOpenAI } from '@/lib/openai';
 export async function POST(req: Request) {
   try {
     const { script, targetLanguage, characterProfile, locationProfile, characters } = await req.json();
+    const { script, targetLanguage, characterProfile, locationProfile, characters } = await req.json();
 
     // Check if any valid AI API key is available
     const groqKey = process.env.GROQ_API_KEY;
     const openaiKey = process.env.OPENAI_API_KEY;
     const hasValidKey = (groqKey && !groqKey.includes('put_your') && !groqKey.includes('your_key_here')) ||
-                        (openaiKey && !openaiKey.includes('put_your') && !openaiKey.includes('your_key_here'));
-    
+      (openaiKey && !openaiKey.includes('put_your') && !openaiKey.includes('your_key_here'));
+
     if (!hasValidKey) {
       // Return Mock Data so the user can test the app without an API key
       return NextResponse.json({
@@ -41,7 +42,7 @@ export async function POST(req: Request) {
 
     // Multi-character system: if characters array is provided, use it; otherwise fall back to single characterProfile
     const hasCharacters = Array.isArray(characters) && characters.length > 0 && characters.some((c: any) => c.name && c.description);
-    
+
     let charInstruction: string;
     if (hasCharacters) {
       const charList = characters
@@ -121,13 +122,15 @@ Return ONLY a raw JSON object (no markdown, no explanation):
 
     const userMessage = `Here is the story script to analyze and divide into scenes:\n\n"""\n${script}\n"""`;
 
-    let responseText: string;
+    let finalScenes;
+    let finalThumbnailPrompt = null;
+
     try {
       // 60-second timeout via AbortController
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 60000);
 
-      responseText = await callOpenAI(
+      const responseText = await callOpenAI(
         {
           model: 'gpt-4o-mini',
           messages: [
@@ -142,9 +145,48 @@ Return ONLY a raw JSON object (no markdown, no explanation):
       );
 
       clearTimeout(timeoutId);
+
+      if (!responseText) {
+        throw new Error('Empty response from OpenAI');
+      }
+
+      let cleanedText = responseText.trim();
+
+      // Attempt to extract the JSON block if the response is surrounded by conversational text
+      const firstBrace = cleanedText.indexOf('{');
+      const firstBracket = cleanedText.indexOf('[');
+      const lastBrace = cleanedText.lastIndexOf('}');
+      const lastBracket = cleanedText.lastIndexOf(']');
+
+      let jsonText = cleanedText;
+
+      if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+        if (lastBrace !== -1 && lastBrace > firstBrace) {
+          jsonText = cleanedText.slice(firstBrace, lastBrace + 1);
+        }
+      } else if (firstBracket !== -1) {
+        if (lastBracket !== -1 && lastBracket > firstBracket) {
+          jsonText = cleanedText.slice(firstBracket, lastBracket + 1);
+        }
+      }
+
+      const parsed = JSON.parse(jsonText);
+
+      // Handle both formats: new format { thumbnailPrompt, scenes } or legacy array format
+      if (Array.isArray(parsed)) {
+        finalScenes = parsed;
+      } else {
+        finalThumbnailPrompt = parsed.thumbnailPrompt || null;
+        finalScenes = parsed.scenes || parsed;
+      }
+
+      if (!Array.isArray(finalScenes)) {
+        throw new Error('Parsed scenes is not an array');
+      }
+
     } catch (apiError: unknown) {
       const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
-      console.warn("OpenAI API failed, using Local Fallback Splitter:", errorMessage);
+      console.warn("OpenAI API or JSON parsing failed, using Local Fallback Splitter:", errorMessage);
 
       // Local Fallback: Split into sentences then group 2-3 per scene
       const sentences = script
@@ -152,7 +194,7 @@ Return ONLY a raw JSON object (no markdown, no explanation):
         .map((s: string) => s.trim())
         .filter((s: string) => s.length > 5);
 
-      const fallbackScenes: Array<{imagePrompt: string, dialogue: string}> = [];
+      const fallbackScenes: Array<{ imagePrompt: string, dialogue: string }> = [];
       for (let i = 0; i < sentences.length; i += 2) {
         const group = sentences.slice(i, i + 3); // Take 2-3 sentences
         if (group.length > 0) {
@@ -183,10 +225,10 @@ Return ONLY a raw JSON object (no markdown, no explanation):
 
     // Strip markdown code fences if present
     let cleanedText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-    
+
     // Try to extract JSON from the response (AI might add explanatory text before/after)
     let parsed;
-    
+
     // Attempt 1: Direct parse
     try {
       parsed = JSON.parse(cleanedText);
@@ -216,8 +258,8 @@ Return ONLY a raw JSON object (no markdown, no explanation):
     }
 
     return NextResponse.json({
-      thumbnailPrompt: parsed.thumbnailPrompt || null,
-      scenes: parsed.scenes || parsed
+      thumbnailPrompt: finalThumbnailPrompt,
+      scenes: finalScenes
     });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -228,3 +270,4 @@ Return ONLY a raw JSON object (no markdown, no explanation):
     );
   }
 }
+
