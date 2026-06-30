@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 export async function POST(req: Request) {
   try {
-    const { prompt, style, aspectRatio } = await req.json();
+    const { prompt, style, aspectRatio, seed } = await req.json();
 
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
@@ -17,9 +17,10 @@ export async function POST(req: Request) {
         height = 1024;
     }
     
-    const seed = 42; 
-    const encodedPrompt = encodeURIComponent(`Masterpiece, best quality, ${visualStyle}, ${prompt}`);
-    const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${seed}`;
+    const imageSeed = seed !== undefined ? seed : 42;
+    const qualityPrefix = `Masterpiece, best quality, perfect face, detailed eyes, symmetrical face, beautiful lighting, ${visualStyle}`;
+    const encodedPrompt = encodeURIComponent(`${qualityPrefix}, ${prompt}`);
+    const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${imageSeed}&negative=deformed,ugly,bad+anatomy,disfigured,poorly+drawn+face,mutation,extra+limbs,blurry`;
 
     // Retry logic — up to 3 attempts with increasing delay
     let lastError: Error | null = null;

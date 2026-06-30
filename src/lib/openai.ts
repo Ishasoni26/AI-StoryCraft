@@ -9,6 +9,7 @@ export interface OpenAIChatRequest {
   messages: Array<{ role: 'system' | 'user'; content: string }>;
   temperature: number;
   max_tokens: number;
+  jsonMode?: boolean;
 }
 
 export interface OpenAIChatResponse {
@@ -77,10 +78,11 @@ export async function callOpenAI(
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify({
-      model: config.model, // Use provider's preferred model
+      model: config.model,
       messages: request.messages,
       temperature: request.temperature,
       max_tokens: request.max_tokens,
+      ...(request.jsonMode ? { response_format: { type: 'json_object' } } : {}),
     }),
     signal,
   });
@@ -93,6 +95,11 @@ export async function callOpenAI(
   }
 
   const data: OpenAIChatResponse = await response.json();
+
+  // Check if response was truncated
+  if (data.choices?.[0]?.finish_reason === 'length') {
+    console.warn('AI response was truncated (hit max_tokens limit)');
+  }
 
   const content = data.choices?.[0]?.message?.content;
 
