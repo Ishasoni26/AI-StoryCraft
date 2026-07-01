@@ -4,7 +4,6 @@ import { callOpenAI } from '@/lib/openai';
 export async function POST(req: Request) {
   try {
     const { script, targetLanguage, characterProfile, locationProfile, characters } = await req.json();
-    const { script, targetLanguage, characterProfile, locationProfile, characters } = await req.json();
 
     // Check if any valid AI API key is available
     const groqKey = process.env.GROQ_API_KEY;
@@ -217,44 +216,6 @@ Return ONLY a raw JSON object (no markdown, no explanation):
       return NextResponse.json({
         scenes: fallbackScenes
       });
-    }
-
-    if (!responseText) {
-      throw new Error('Empty response from OpenAI');
-    }
-
-    // Strip markdown code fences if present
-    let cleanedText = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-
-    // Try to extract JSON from the response (AI might add explanatory text before/after)
-    let parsed;
-
-    // Attempt 1: Direct parse
-    try {
-      parsed = JSON.parse(cleanedText);
-    } catch {
-      // Attempt 2: Find JSON object or array in the text
-      const jsonMatch = cleanedText.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-      if (jsonMatch) {
-        try {
-          // Replace unescaped newlines inside strings
-          const fixedJson = jsonMatch[0].replace(/\n/g, ' ').replace(/\r/g, '').replace(/\t/g, ' ');
-          parsed = JSON.parse(fixedJson);
-        } catch {
-          // Attempt 3: Aggressive cleanup
-          const aggressive = jsonMatch[0]
-            .replace(/[\x00-\x1F\x7F]/g, ' ')  // Replace ALL control chars with space
-            .replace(/\s+/g, ' ');               // Collapse multiple spaces
-          parsed = JSON.parse(aggressive);
-        }
-      } else {
-        throw new Error('AI response did not contain valid JSON. Response started with: ' + cleanedText.slice(0, 100));
-      }
-    }
-
-    // Handle both formats: new format { thumbnailPrompt, scenes } or legacy array format
-    if (Array.isArray(parsed)) {
-      return NextResponse.json({ scenes: parsed });
     }
 
     return NextResponse.json({

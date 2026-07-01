@@ -242,6 +242,30 @@ export default function Home() {
     localStorage.setItem('storyCharacters', JSON.stringify(characters));
   }, [characters]);
 
+  // Warning for visibility change during export
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden' && isDownloading) {
+        console.warn("Exporting in background tab. This will cause audio-video desync or cut-offs.");
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isDownloading]);
+
+  // Prevent leaving page during export
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isDownloading) {
+        e.preventDefault();
+        e.returnValue = 'Export is in progress. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isDownloading]);
+
   const handleAddCharacter = () => {
     const newChar: CharacterEntry = {
       id: Date.now().toString(),
@@ -811,10 +835,8 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
       }));
 
       let isRecordingProcess = true;
-      let currentDrawIdx = 0;
-      let exportSceneStartMs = 0;
-      let exportSceneDurationMs = 3000;
-      let recordingStartMs = 0;
+      let activeExportSceneIdx = 0;
+      let activeExportSceneStartMs = 0;
 
       // Pre-calculate all scene durations BEFORE starting recording
       const sceneDurations: number[] = [];
@@ -839,27 +861,13 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
         ctx.fillStyle = "black";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Determine which scene we're in based on elapsed time
-        const totalElapsed = Date.now() - recordingStartMs;
-        let cumulative = 0;
-        let sceneIdx = 0;
-        for (let i = 0; i < sceneDurations.length; i++) {
-          if (totalElapsed < cumulative + sceneDurations[i]) {
-            sceneIdx = i;
-            break;
-          }
-          cumulative += sceneDurations[i];
-          if (i === sceneDurations.length - 1) sceneIdx = i;
-        }
-        currentDrawIdx = sceneIdx;
-        exportSceneStartMs = cumulative;
-        exportSceneDurationMs = sceneDurations[sceneIdx];
+        const sceneIdx = activeExportSceneIdx;
+        const elapsedInScene = activeExportSceneStartMs > 0 ? Date.now() - activeExportSceneStartMs : 0;
+        const durationMs = sceneDurations[sceneIdx] || 3000;
+        const progress = Math.min(1, elapsedInScene / durationMs);
 
-        const scene = scenes[currentDrawIdx];
-        const img = loadedImages[currentDrawIdx];
-
-        const elapsedInScene = totalElapsed - exportSceneStartMs;
-        const progress = Math.min(1, elapsedInScene / exportSceneDurationMs);
+        const scene = scenes[sceneIdx];
+        const img = loadedImages[sceneIdx];
 
         if (img && img.width > 0) {
           const canvasRatio = canvas.width / canvas.height;
@@ -884,8 +892,8 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
           const baseOffsetY = (canvas.height - scaledHeight) / 2;
 
           // Ken Burns pan (alternating direction per scene)
-          const panDirX = currentDrawIdx % 2 === 0 ? 1 : -1;
-          const panDirY = currentDrawIdx % 3 === 0 ? 1 : -1;
+          const panDirX = sceneIdx % 2 === 0 ? 1 : -1;
+          const panDirY = sceneIdx % 3 === 0 ? 1 : -1;
 
           // Move from center by up to 5% of dimensions
           const panOffsetX = (progress * (scaledWidth * 0.05)) * panDirX;
@@ -899,7 +907,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
             drawThumbnailText(ctx, canvas.width, canvas.height, scene.dialogue, storyPart, aspectRatio === '9:16');
           } else if (subtitleStyle !== 'none') {
             const words = scene.dialogue.split(' ');
-            let activeWordIndex = Math.floor((elapsedInScene / exportSceneDurationMs) * words.length);
+            let activeWordIndex = Math.floor((elapsedInScene / durationMs) * words.length);
             if (isNaN(activeWordIndex) || activeWordIndex < 0) activeWordIndex = 0;
             if (activeWordIndex >= words.length) activeWordIndex = words.length - 1;
 
@@ -962,8 +970,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
         // Update export progress
         setExportProgress(Math.round((idx / scenes.length) * 100));
 
-        currentDrawIdx = idx;
-        exportSceneDurationMs = sceneDurations[idx];
+        const durationMs = sceneDurations[idx] || 3000;
 
         if (scenes[idx].audioUrl) {
           try {
@@ -980,20 +987,26 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
             source.connect(voiceGainNode);
             voiceGainNode.connect(dest);
 
+            activeExportSceneIdx = idx;
+            activeExportSceneStartMs = Date.now();
+
             source.start();
 
-            setTimeout(() => processScene(idx + 1), sceneDurations[idx]);
+            setTimeout(() => processScene(idx + 1), durationMs);
           } catch (err) {
             console.error("Audio decode error", err);
+            activeExportSceneIdx = idx;
+            activeExportSceneStartMs = Date.now();
             setTimeout(() => processScene(idx + 1), 3000);
           }
         } else {
-          setTimeout(() => processScene(idx + 1), sceneDurations[idx]);
+          activeExportSceneIdx = idx;
+          activeExportSceneStartMs = Date.now();
+          setTimeout(() => processScene(idx + 1), durationMs);
         }
       };
 
       audioCtx.resume().then(() => {
-        recordingStartMs = Date.now();
         drawFrame();
         processScene(0);
       });
@@ -1030,13 +1043,17 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
   };
 
 
-  const activeModalScene = modalImageUrl
-    ? (storyboardScenes.find(s => s.imageUrl === modalImageUrl) || scenes.find(s => s.imageUrl === modalImageUrl))
+  const activeModalScene = modalImage
+    ? (storyboardScenes.find(s => s.imageUrl === modalImage) || scenes.find(s => s.imageUrl === modalImage))
     : null;
 
   const activeModalIdx = activeModalScene
     ? (storyboardScenes.includes(activeModalScene) ? storyboardScenes.indexOf(activeModalScene) : scenes.indexOf(activeModalScene))
     : -1;
+
+  const activeModalChar = modalImage
+    ? characters.find(c => c.imageUrl === modalImage)
+    : null;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 font-sans selection:bg-indigo-500/30">
@@ -1058,38 +1075,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
         )}
       </AnimatePresence>
 
-      {/* Image Preview Modal */}
-      <AnimatePresence>
-        {modalImage && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 cursor-pointer"
-            onClick={() => setModalImage(null)}
-          >
-            <motion.div
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.8, opacity: 0 }}
-              className="relative max-w-4xl w-full max-h-[85vh] cursor-default"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <img
-                src={modalImage}
-                alt="Preview"
-                className="w-full h-full object-contain rounded-2xl shadow-2xl"
-              />
-              <button
-                onClick={() => setModalImage(null)}
-                className="absolute top-3 right-3 w-10 h-10 bg-black/60 hover:bg-black/80 text-white rounded-full flex items-center justify-center transition-colors"
-              >
-                <XCircle className="w-6 h-6" />
-              </button>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+
 
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-indigo-500/20 blur-[120px] rounded-full" />
@@ -1612,7 +1598,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     <button
-                                      onClick={(e) => { e.stopPropagation(); setModalImageUrl(scene.imageUrl); }}
+                                      onClick={(e) => { e.stopPropagation(); setModalImage(scene.imageUrl!); }}
                                       className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg cursor-pointer"
                                     >
                                       <Eye className="w-3.5 h-3.5" />
@@ -1872,13 +1858,13 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
 
       {/* Lightbox Modal for Full Image Preview */}
       <AnimatePresence>
-        {modalImageUrl && (
+        {modalImage && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={() => setModalImageUrl(null)}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md cursor-zoom-out"
+            onClick={() => setModalImage(null)}
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md cursor-zoom-out"
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
@@ -1889,7 +1875,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
             >
               {/* Close Button */}
               <button
-                onClick={() => setModalImageUrl(null)}
+                onClick={() => setModalImage(null)}
                 className="absolute top-4 right-4 bg-slate-950/80 hover:bg-slate-800 text-slate-400 hover:text-white p-2.5 rounded-full transition-colors z-10 border border-slate-700/30"
                 title="Close"
               >
@@ -1900,14 +1886,14 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
               <div className="p-6 flex flex-col items-center justify-center">
                 <div className="relative w-full flex items-center justify-center rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-inner">
                   <img
-                    src={modalImageUrl}
+                    src={modalImage}
                     alt="Full preview image"
                     className="max-h-[60vh] object-contain rounded-2xl"
                   />
                 </div>
               </div>
 
-              {/* Info panel at the bottom of the modal */}
+              {/* Info panel for scenes */}
               {activeModalScene && (
                 <div className="bg-slate-950/90 border-t border-slate-800/85 p-6 space-y-3">
                   <div className="flex items-center space-x-2">
@@ -1931,6 +1917,86 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                   )}
                 </div>
               )}
+
+              {/* Info panel for characters */}
+              {activeModalChar && (
+                <div className="bg-slate-950/90 border-t border-slate-800/85 p-6 space-y-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-bold text-violet-400 bg-violet-950/30 border border-violet-900/50 px-2.5 py-1 rounded-md">
+                      CHARACTER
+                    </span>
+                  </div>
+                  {activeModalChar.name && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Name</span>
+                      <p className="text-md font-bold text-violet-300 leading-snug">{activeModalChar.name}</p>
+                    </div>
+                  )}
+                  {activeModalChar.description && (
+                    <div className="space-y-1">
+                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Visual Description</span>
+                      <p className="text-xs text-slate-300 bg-slate-900/60 p-3 rounded-xl border border-slate-800/40 select-all font-mono leading-relaxed max-h-24 overflow-y-auto custom-scrollbar">
+                        {activeModalChar.description}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Export Progress Modal */}
+      <AnimatePresence>
+        {isDownloading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl flex flex-col items-center text-center space-y-6"
+            >
+              <div className="w-16 h-16 bg-indigo-500/10 rounded-2xl flex items-center justify-center text-indigo-400 animate-pulse border border-indigo-500/20">
+                <Loader2 className="w-8 h-8 animate-spin" />
+              </div>
+              
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold text-white">Exporting Video</h3>
+                <p className="text-sm text-slate-400">
+                  We are rendering and compiling your scenes. This may take a few minutes.
+                </p>
+              </div>
+
+              {/* Progress Bar */}
+              <div className="w-full space-y-2">
+                <div className="flex justify-between text-xs font-bold text-slate-400">
+                  <span>Progress</span>
+                  <span className="text-indigo-400">{exportProgress}%</span>
+                </div>
+                <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700/50">
+                  <div
+                    className="bg-indigo-500 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${exportProgress}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Warning Alert Box */}
+              <div className="w-full bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 text-left flex items-start space-x-3">
+                <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span className="text-xs font-bold text-amber-400 uppercase tracking-wider block">Important</span>
+                  <p className="text-xs text-amber-200/80 leading-relaxed">
+                    Please **keep this tab active and visible**. Do not minimize this window or switch to other tabs. If the browser tab is hidden, the video generation will be throttled, resulting in a cut-off or out-of-sync download.
+                  </p>
+                </div>
+              </div>
             </motion.div>
           </motion.div>
         )}
