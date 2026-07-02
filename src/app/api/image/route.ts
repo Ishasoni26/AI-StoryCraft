@@ -17,13 +17,13 @@ export async function POST(req: Request) {
         height = 1024;
     }
     
-    const imageSeed = seed !== undefined ? seed : 42;
+    const imageSeed = seed !== undefined ? seed : Math.floor(Math.random() * 999999);
     const qualityPrefix = `Masterpiece, best quality, perfect face, detailed eyes, symmetrical face, beautiful lighting, ${visualStyle}`;
     const encodedPrompt = encodeURIComponent(`${qualityPrefix}, ${prompt}`);
-    const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${imageSeed}&negative=deformed,ugly,bad+anatomy,disfigured,poorly+drawn+face,mutation,extra+limbs,blurry`;
+    const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${imageSeed}&nofeed=true&negative=deformed,ugly,bad+anatomy,disfigured,poorly+drawn+face,mutation,extra+limbs,blurry`;
 
     // Retry logic — up to 3 attempts with increasing delay
-    let lastError: Error | null = null;
+    let lastError: unknown = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const controller = new AbortController();
@@ -65,9 +65,10 @@ export async function POST(req: Request) {
     }
 
     // All retries exhausted — return error instead of placeholder
-    console.error('All image generation attempts failed:', lastError?.message);
+    const errorMessage = lastError instanceof Error ? lastError.message : 'Unknown error';
+    console.error('All image generation attempts failed:', errorMessage);
     return NextResponse.json(
-      { error: 'Image generation failed after 3 attempts', details: lastError?.message || 'Unknown error' },
+      { error: 'Image generation failed after 3 attempts', details: errorMessage },
       { status: 503 }
     );
   } catch (error: any) {

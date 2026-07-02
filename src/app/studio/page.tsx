@@ -1,10 +1,17 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Wand2, Play, Sparkles, Video, Pause, AlertCircle, Download, Loader2, Edit3, ChevronRight, ChevronDown, ChevronUp, CheckCircle2, Image as ImageIcon, Globe, Mail, Link, XCircle, MessageSquare, Mic, Scissors, Zap, Music, Smartphone, Settings, PenTool, Volume2, Type, FileText, Upload, Trash2, Plus, Users, Eye } from 'lucide-react';
+import { Wand2, Play, Sparkles, Video, Pause, AlertCircle, Download, Loader2, Edit3, ChevronRight, ChevronDown, ChevronUp, CheckCircle2, Image as ImageIcon, Globe, Mail, Link, XCircle, MessageSquare, Mic, Scissors, Zap, Music, Smartphone, Settings, PenTool, Volume2, Type, FileText, Upload, Trash2, Plus, Clock, Timer } from 'lucide-react';
 
 import Nav from '../../components/Nav';
+import ProgressTracker from '@/components/ProgressTracker';
+import { calculateTotalDuration } from '@/lib/long-video/duration-calculator';
+import { estimateGenerationTime, formatGenerationTime } from '@/lib/long-video/generation-estimator';
+import { SceneBatchProcessor } from '@/lib/long-video/batch-processor';
+import { ExportEngine } from '@/lib/long-video/export-engine';
+import { loadAssets, saveAssets, clearAssets, generateSessionId, findCachedSession } from '@/lib/long-video/asset-cache';
+import type { ProgressPhase, ExtendedScene, ExportConfig } from '@/lib/long-video/types';
 
 interface Scene {
   imagePrompt: string;
@@ -41,120 +48,120 @@ const BGM_TRACKS = [
 const LANGUAGES = ["Hindi", "English", "Spanish", "German"];
 
 const drawThumbnailText = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number, dialogue: string, part: string, isPortrait: boolean) => {
-  // dialogue format: "StoryTitle - PartTitle, Part X" or "StoryTitle, Part X"
-  // Parse the parts
-  let storyName = dialogue;
-  let partTitle = '';
-  let partNum = part || 'PART 1';
+    // dialogue format: "StoryTitle - PartTitle, Part X" or "StoryTitle, Part X"
+    // Parse the parts
+    let storyName = dialogue;
+    let partTitle = '';
+    let partNum = part || 'PART 1';
 
-  // Extract part number from dialogue if present (e.g., ", Part 1" or ", Part-1" or ", Part - 1" or ", PART-1")
-  const partMatch = dialogue.match(/,\s*(Part[\s\-]*\d+)/i);
-  if (partMatch) {
-    partNum = partMatch[1].replace(/[\s\-]+/g, ' ').trim().toUpperCase();
-    storyName = dialogue.replace(/,\s*Part[\s\-]*\d+/i, '').trim();
-  }
+    // Extract part number from dialogue if present (e.g., ", Part 1" or ", Part-1" or ", Part - 1" or ", PART-1")
+    const partMatch = dialogue.match(/,\s*(Part[\s\-]*\d+)/i);
+    if (partMatch) {
+      partNum = partMatch[1].replace(/[\s\-]+/g, ' ').trim().toUpperCase();
+      storyName = dialogue.replace(/,\s*Part[\s\-]*\d+/i, '').trim();
+    }
 
-  // Extract part title if present (after " - ")
-  const titleMatch = storyName.match(/^(.+?)\s*-\s*(.+)$/);
-  if (titleMatch) {
-    storyName = titleMatch[1].trim();
-    partTitle = titleMatch[2].trim();
-  }
+    // Extract part title if present (after " - ")
+    const titleMatch = storyName.match(/^(.+?)\s*-\s*(.+)$/);
+    if (titleMatch) {
+      storyName = titleMatch[1].trim();
+      partTitle = titleMatch[2].trim();
+    }
 
-  // Dark gradient overlay on left side for text readability
-  const gradient = isPortrait
-    ? ctx.createLinearGradient(0, 0, 0, canvasHeight * 0.6)
-    : ctx.createLinearGradient(0, 0, canvasWidth * 0.65, 0);
+    // Dark gradient overlay on left side for text readability
+    const gradient = isPortrait 
+        ? ctx.createLinearGradient(0, 0, 0, canvasHeight * 0.6)
+        : ctx.createLinearGradient(0, 0, canvasWidth * 0.65, 0);
+        
+    gradient.addColorStop(0, "rgba(0,0,0,0.92)");
+    gradient.addColorStop(0.6, "rgba(0,0,0,0.6)");
+    gradient.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  gradient.addColorStop(0, "rgba(0,0,0,0.92)");
-  gradient.addColorStop(0.6, "rgba(0,0,0,0.6)");
-  gradient.addColorStop(1, "rgba(0,0,0,0)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    const leftMargin = isPortrait ? canvasWidth / 2 : 60;
+    ctx.textAlign = isPortrait ? "center" : "left";
 
-  const leftMargin = isPortrait ? canvasWidth / 2 : 60;
-  ctx.textAlign = isPortrait ? "center" : "left";
+    // === PART NUMBER — Red pill badge, top-left ===
+    const pillW = 180;
+    const pillH = 50;
+    const pillX = isPortrait ? (canvasWidth - pillW) / 2 : leftMargin;
+    const pillY = isPortrait ? 60 : 40;
 
-  // === PART NUMBER — Red pill badge, top-left ===
-  const pillW = 180;
-  const pillH = 50;
-  const pillX = isPortrait ? (canvasWidth - pillW) / 2 : leftMargin;
-  const pillY = isPortrait ? 60 : 40;
-
-  ctx.fillStyle = "#FF3B30";
-  ctx.beginPath();
-  ctx.roundRect(pillX, pillY, pillW, pillH, 25);
-  ctx.fill();
-
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "bold 28px 'Arial Black', Impact, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(partNum.toUpperCase(), pillX + pillW / 2, pillY + pillH / 2);
-
-  // === STORY TITLE — Large white text with golden glow ===
-  ctx.textAlign = isPortrait ? "center" : "left";
-  ctx.textBaseline = "top";
-  const titleFontSize = isPortrait ? 70 : 90;
-  const titleY = isPortrait ? 140 : 120;
-
-  ctx.font = `900 ${titleFontSize}px 'Arial Black', Impact, sans-serif`;
-
-  // Black stroke for readability
-  ctx.lineWidth = 12;
-  ctx.strokeStyle = "black";
-  ctx.strokeText(storyName, leftMargin, titleY);
-
-  // Golden glow
-  ctx.shadowColor = "rgba(255, 213, 79, 0.6)";
-  ctx.shadowBlur = 20;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
-
-  // White fill
-  ctx.fillStyle = "#ffffff";
-  ctx.fillText(storyName, leftMargin, titleY);
-  ctx.shadowColor = "transparent";
-
-  // === PART TITLE — Black pill container with golden text ===
-  if (partTitle) {
-    const ptFontSize = isPortrait ? 36 : 42;
-    ctx.font = `bold ${ptFontSize}px 'Arial Black', sans-serif`;
-    const ptTextWidth = ctx.measureText(partTitle).width;
-    const ptPillW = ptTextWidth + 50;
-    const ptPillH = isPortrait ? 55 : 60;
-    const ptY = titleY + titleFontSize + 30;
-    const ptX = isPortrait ? (canvasWidth - ptPillW) / 2 : leftMargin;
-
-    // Black pill background
-    ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+    ctx.fillStyle = "#FF3B30";
     ctx.beginPath();
-    ctx.roundRect(ptX, ptY, ptPillW, ptPillH, 30);
+    ctx.roundRect(pillX, pillY, pillW, pillH, 25);
     ctx.fill();
 
-    // Golden border
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "#FFD54F";
-    ctx.beginPath();
-    ctx.roundRect(ptX, ptY, ptPillW, ptPillH, 30);
-    ctx.stroke();
-
-    // Golden text
-    ctx.fillStyle = "#FFD54F";
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 28px 'Arial Black', Impact, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(partTitle, ptX + ptPillW / 2, ptY + ptPillH / 2);
-  }
+    ctx.fillText(partNum.toUpperCase(), pillX + pillW / 2, pillY + pillH / 2);
 
-  // === BOTTOM — "Hindi Story" branding ===
-  const brandY = canvasHeight - (isPortrait ? 80 : 60);
-  const brandX = isPortrait ? canvasWidth / 2 : leftMargin;
-  ctx.textAlign = isPortrait ? "center" : "left";
-  ctx.textBaseline = "middle";
+    // === STORY TITLE — Large white text with golden glow ===
+    ctx.textAlign = isPortrait ? "center" : "left";
+    ctx.textBaseline = "top";
+    const titleFontSize = isPortrait ? 70 : 90;
+    const titleY = isPortrait ? 140 : 120;
 
-  ctx.font = "italic 24px Georgia, serif";
-  ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
-  ctx.fillText("✨ Hindi Story", brandX, brandY);
+    ctx.font = `900 ${titleFontSize}px 'Arial Black', Impact, sans-serif`;
+    
+    // Black stroke for readability
+    ctx.lineWidth = 12;
+    ctx.strokeStyle = "black";
+    ctx.strokeText(storyName, leftMargin, titleY);
+    
+    // Golden glow
+    ctx.shadowColor = "rgba(255, 213, 79, 0.6)";
+    ctx.shadowBlur = 20;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    
+    // White fill
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(storyName, leftMargin, titleY);
+    ctx.shadowColor = "transparent";
+
+    // === PART TITLE — Black pill container with golden text ===
+    if (partTitle) {
+      const ptFontSize = isPortrait ? 36 : 42;
+      ctx.font = `bold ${ptFontSize}px 'Arial Black', sans-serif`;
+      const ptTextWidth = ctx.measureText(partTitle).width;
+      const ptPillW = ptTextWidth + 50;
+      const ptPillH = isPortrait ? 55 : 60;
+      const ptY = titleY + titleFontSize + 30;
+      const ptX = isPortrait ? (canvasWidth - ptPillW) / 2 : leftMargin;
+
+      // Black pill background
+      ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+      ctx.beginPath();
+      ctx.roundRect(ptX, ptY, ptPillW, ptPillH, 30);
+      ctx.fill();
+
+      // Golden border
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "#FFD54F";
+      ctx.beginPath();
+      ctx.roundRect(ptX, ptY, ptPillW, ptPillH, 30);
+      ctx.stroke();
+
+      // Golden text
+      ctx.fillStyle = "#FFD54F";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(partTitle, ptX + ptPillW / 2, ptY + ptPillH / 2);
+    }
+
+    // === BOTTOM — "Hindi Story" branding ===
+    const brandY = canvasHeight - (isPortrait ? 80 : 60);
+    const brandX = isPortrait ? canvasWidth / 2 : leftMargin;
+    ctx.textAlign = isPortrait ? "center" : "left";
+    ctx.textBaseline = "middle";
+    
+    ctx.font = "italic 24px Georgia, serif";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+    ctx.fillText("✨ Hindi Story", brandX, brandY);
 };
 
 export default function Home() {
@@ -174,14 +181,56 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'script' | 'settings' | 'characters'>('script');
   const [isUniverseOpen, setIsUniverseOpen] = useState(false);
   const [characters, setCharacters] = useState<CharacterEntry[]>([]);
-
+  
   const [bgmVolume, setBgmVolume] = useState(15);
   const [voiceVolume, setVoiceVolume] = useState(100);
   const [subtitleStyle, setSubtitleStyle] = useState<'viral' | 'cinematic' | 'none'>('viral');
 
+  // Video mode state (long-video-export feature)
+  const [videoMode, setVideoMode] = useState<'short' | 'long'>('short');
+  const [targetDurationMinutes, setTargetDurationMinutes] = useState(12);
+  const [showModeSwitchConfirm, setShowModeSwitchConfirm] = useState(false);
+
+  // Asset recovery state (Req 4.8)
+  const [sessionId, setSessionId] = useState<string>(() => generateSessionId());
+  const [showRecoveryPrompt, setShowRecoveryPrompt] = useState(false);
+  const recoveredAssetsRef = useRef<import('@/lib/long-video/types').AssetCache | null>(null);
+
+  // Long-form progress tracking state
+  const [longFormPhases, setLongFormPhases] = useState<ProgressPhase[]>([]);
+  const [longFormOverallPercent, setLongFormOverallPercent] = useState(0);
+  const [longFormTimeRemaining, setLongFormTimeRemaining] = useState(0);
+  const [longFormProgressVisible, setLongFormProgressVisible] = useState(false);
+  const [longFormIsPaused, setLongFormIsPaused] = useState(false);
+  const batchProcessorRef = useRef<SceneBatchProcessor | null>(null);
+
   const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false);
   const [isStoryboardMode, setIsStoryboardMode] = useState(false);
   const [storyboardScenes, setStoryboardScenes] = useState<Scene[]>([]);
+
+  // Estimated duration indicator - recalculates when scenes change (Req 6.3)
+  const estimatedDuration = useMemo(() => {
+    if (videoMode !== 'long' || storyboardScenes.length === 0) return null;
+    // Use audioDurationMs if available, otherwise estimate from dialogue word count
+    const sceneDurations = storyboardScenes.map((scene) => {
+      if ((scene as any).audioDurationMs) return (scene as any).audioDurationMs;
+      // Estimate: ~130 words/minute for Hindi narration = ~462ms per word
+      const wordCount = scene.dialogue.split(/\s+/).filter(Boolean).length;
+      return wordCount * 462;
+    });
+    return calculateTotalDuration(sceneDurations);
+  }, [videoMode, storyboardScenes]);
+
+  // Generation time estimate (Req 6.4)
+  const generationTimeEstimate = useMemo(() => {
+    if (videoMode !== 'long' || storyboardScenes.length === 0) return null;
+    const sceneCount = storyboardScenes.length;
+    const wordCount = storyboardScenes.reduce((total, scene) => {
+      return total + scene.dialogue.split(/\s+/).filter(Boolean).length;
+    }, 0);
+    const seconds = estimateGenerationTime(sceneCount, wordCount);
+    return formatGenerationTime(seconds);
+  }, [videoMode, storyboardScenes]);
 
   const [isGeneratingVideo, setIsGeneratingVideo] = useState(false);
   const [generatingImageIdx, setGeneratingImageIdx] = useState<number | null>(null);
@@ -193,7 +242,7 @@ export default function Home() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
-
+  
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [modalImage, setModalImage] = useState<string | null>(null);
@@ -208,20 +257,20 @@ export default function Home() {
     let interval: NodeJS.Timeout;
     if (isPlaying && scenes[currentSceneIdx] && !scenes[currentSceneIdx].isThumbnail) {
       interval = setInterval(() => {
-        const scene = scenes[currentSceneIdx];
-        const durationMs = (audioRef.current && audioRef.current.duration) ? audioRef.current.duration * 1000 : 3000;
-        const elapsed = Date.now() - sceneStartTime;
-        const words = scene.dialogue.split(' ');
-
-        // Safe active word index
-        let activeWordIndex = Math.floor((elapsed / durationMs) * words.length);
-        if (isNaN(activeWordIndex) || activeWordIndex < 0) activeWordIndex = 0;
-        if (activeWordIndex >= words.length) activeWordIndex = words.length - 1;
-
-        const wordsPerChunk = 6; // Show 6 words at a time for full video subtitles
-        const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
-        const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
-        setActiveCaptionChunk(chunk);
+         const scene = scenes[currentSceneIdx];
+         const durationMs = (audioRef.current && audioRef.current.duration) ? audioRef.current.duration * 1000 : 3000;
+         const elapsed = Date.now() - sceneStartTime;
+         const words = scene.dialogue.split(' ');
+         
+         // Safe active word index
+         let activeWordIndex = Math.floor((elapsed / durationMs) * words.length);
+         if (isNaN(activeWordIndex) || activeWordIndex < 0) activeWordIndex = 0;
+         if (activeWordIndex >= words.length) activeWordIndex = words.length - 1;
+         
+         const wordsPerChunk = 6; // Show 6 words at a time for full video subtitles
+         const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
+         const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
+         setActiveCaptionChunk(chunk);
       }, 100);
     } else {
       setActiveCaptionChunk('');
@@ -242,29 +291,44 @@ export default function Home() {
     localStorage.setItem('storyCharacters', JSON.stringify(characters));
   }, [characters]);
 
-  // Warning for visibility change during export
+  // Asset recovery: check for cached assets on mount (Req 4.8)
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden' && isDownloading) {
-        console.warn("Exporting in background tab. This will cause audio-video desync or cut-offs.");
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isDownloading]);
+    const cached = findCachedSession();
+    if (cached && cached.scenes && cached.scenes.length > 0) {
+      recoveredAssetsRef.current = cached;
+      setShowRecoveryPrompt(true);
+    }
+  }, []);
 
-  // Prevent leaving page during export
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isDownloading) {
-        e.preventDefault();
-        e.returnValue = 'Export is in progress. Are you sure you want to leave?';
-        return e.returnValue;
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isDownloading]);
+  const handleResumeRecovery = () => {
+    const cached = recoveredAssetsRef.current;
+    if (cached) {
+      // Restore the session ID so future saves go to the same key
+      setSessionId(cached.sessionId);
+      // Restore cached scene data into storyboard
+      const restoredScenes: Scene[] = cached.scenes.map((s) => ({
+        imagePrompt: s.imagePrompt || '',
+        dialogue: s.dialogue || '',
+        imageUrl: s.imageUrl,
+        audioUrl: s.audioUrl,
+      }));
+      setStoryboardScenes(restoredScenes);
+      setIsStoryboardMode(true);
+      setVideoMode('long');
+      showToast('Previous generation restored. Already-generated assets are available.');
+    }
+    setShowRecoveryPrompt(false);
+    recoveredAssetsRef.current = null;
+  };
+
+  const handleStartFresh = () => {
+    const cached = recoveredAssetsRef.current;
+    if (cached) {
+      clearAssets(cached.sessionId);
+    }
+    setShowRecoveryPrompt(false);
+    recoveredAssetsRef.current = null;
+  };
 
   const handleAddCharacter = () => {
     const newChar: CharacterEntry = {
@@ -291,7 +355,7 @@ export default function Home() {
 
     try {
       const prompt = `Single character portrait, ONE person only, ${char.description}, standing in a simple neutral pose, looking at the camera, plain white background, clean studio lighting, full body visible, sharp details, 3D Pixar style, high quality character design, 8k resolution. IMPORTANT: Show only ONE single character, not multiple copies or multiple angles.`;
-
+      
       const imgRes = await fetch('/api/image', {
         method: 'POST',
         body: JSON.stringify({ prompt, style: visualStyle, aspectRatio: '16:9', seed: globalSeed }),
@@ -323,8 +387,7 @@ export default function Home() {
       characterProfile,
       locationProfile,
       visualStyle,
-      globalSeed,
-      characters
+      globalSeed
     };
     localStorage.setItem('storyUniverse', JSON.stringify(universe));
     showToast("Series Settings Saved! You can load them for Part 2.");
@@ -338,7 +401,6 @@ export default function Home() {
       if (universe.locationProfile) setLocationProfile(universe.locationProfile);
       if (universe.visualStyle) setVisualStyle(universe.visualStyle);
       if (universe.globalSeed) setGlobalSeed(universe.globalSeed);
-      if (universe.characters) setCharacters(universe.characters);
       showToast("Series Settings Loaded! Ready for the next part.");
     } else {
       showToast("No saved series found.");
@@ -349,22 +411,47 @@ export default function Home() {
     if (!idea) return;
     setIsBrainstorming(true);
     showToast("Brainstorming a viral script...");
+
+    // Show progress tracker for long-form mode
+    if (videoMode === 'long') {
+      setLongFormProgressVisible(true);
+      setLongFormPhases([
+        { id: 'script', label: 'Script Generation', status: 'in-progress' },
+        { id: 'scene-division', label: 'Scene Division', status: 'pending' },
+        { id: 'asset-generation', label: 'Asset Generation', status: 'pending' },
+        { id: 'export-ready', label: 'Export Readiness', status: 'pending' },
+      ]);
+      setLongFormOverallPercent(5);
+    }
+
     try {
+      const body: Record<string, any> = { idea, characterProfile, locationProfile };
+      if (videoMode === 'long') {
+        body.isLongForm = true;
+        body.targetDurationMinutes = targetDurationMinutes;
+      }
       const res = await fetch('/api/brainstorm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea, characterProfile, locationProfile })
+        body: JSON.stringify(body)
       });
       const data = await res.json();
       if (res.ok && data.script) {
-        setScript(data.script);
-        showToast("Script generated! You can edit it below.");
+         setScript(data.script);
+         showToast("Script generated! You can edit it below.");
+         if (videoMode === 'long') {
+           setLongFormPhases(prev => prev.map(p => p.id === 'script' ? { ...p, status: 'complete' } : p));
+           setLongFormOverallPercent(20);
+         }
       } else {
-        throw new Error(data.error || 'Failed to brainstorm');
+         throw new Error(data.error || 'Failed to brainstorm');
       }
     } catch (e: any) {
       console.error(e);
       showToast("Error generating script: " + e.message);
+      if (videoMode === 'long') {
+        setLongFormPhases(prev => prev.map(p => p.id === 'script' ? { ...p, status: 'error' } : p));
+      }
     } finally {
       setIsBrainstorming(false);
     }
@@ -379,9 +466,9 @@ export default function Home() {
       : characterProfile
         ? `On the right side, ${characterProfile}, holding or interacting with the KEY OBJECT from the story title "${storyTitle}". The key object must be PROMINENTLY VISIBLE and GLOWING.`
         : '';
-
+    
     const storyObject = storyTitle.trim();
-
+    
     return `Cinematic YouTube thumbnail background image in 16:9 (1280x720). Dark, mysterious, high-contrast fantasy setting with dramatic volumetric lighting. 
 
 MOST IMPORTANT: The story is called "${storyObject}" — the KEY OBJECT/CONCEPT from this title MUST be prominently visible and glowing in the image.
@@ -429,38 +516,77 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
     setStoryboardScenes([]);
     setIsStoryboardMode(false);
 
+    // Update progress tracker for long-form scene division
+    if (videoMode === 'long') {
+      setLongFormProgressVisible(true);
+      setLongFormPhases(prev => prev.map(p =>
+        p.id === 'scene-division' ? { ...p, status: 'in-progress' } : p
+      ));
+      setLongFormOverallPercent(25);
+    }
+    
     try {
+      const requestBody: Record<string, any> = {
+        script,
+        targetLanguage,
+        characterProfile,
+        locationProfile,
+        characters: characters.filter(c => c.name && c.description),
+      };
+      if (videoMode === 'long') {
+        requestBody.isLongForm = true;
+      }
+
       const res = await fetch('/api/generate', {
         method: 'POST',
-        body: JSON.stringify({ script, targetLanguage, characterProfile, locationProfile, characters: characters.filter(c => c.name && c.description) }),
+        body: JSON.stringify(requestBody),
         headers: { 'Content-Type': 'application/json' }
       });
       const data = await res.json();
-
+      
       if (!res.ok) throw new Error(data.details || data.error || 'Failed to generate scenes');
       if (!data.scenes || !Array.isArray(data.scenes)) throw new Error('Invalid response: no scenes array returned');
+      if (data.scenes.length === 0) throw new Error('AI returned 0 scenes. Please try again with a different script.');
+      
+      // Long-form mode: API already includes thumbnail + outro, don't duplicate
+      if (videoMode === 'long') {
+        setStoryboardScenes(data.scenes);
+      } else {
+        // Short-form mode: add thumbnail and outro from frontend
+        const thumbnailPrompt = getThumbnailPrompt();
 
-      // Always generate fresh thumbnail based on current story
-      const thumbnailPrompt = getThumbnailPrompt();
+        const thumbnailScene: Scene = {
+          isThumbnail: true,
+          imagePrompt: thumbnailPrompt,
+          dialogue: `${storyTitle}${partTitle ? ' - ' + partTitle : ''}${storyPart ? ', ' + storyPart : ''}`
+        };
+        
+        // Outro CTA scene
+        const outroScene: Scene = {
+          imagePrompt: `Dark cinematic background with glowing Subscribe button, bell notification icon, thumbs up like icon, and "Next Part Coming Soon" text. YouTube end screen style, vibrant red subscribe button, golden bell icon glowing, modern clean design, dark gradient background with magical particles, professional YouTube outro card, 8k, masterpiece.`,
+          dialogue: `अगर यह कहानी पसंद आई तो Like करें, Subscribe करें, और Bell icon 🔔 जरूर दबाएं ताकि अगला part आते ही notification मिल जाए! अगला part जल्दी आ रहा है...`
+        };
 
-      const thumbnailScene: Scene = {
-        isThumbnail: true,
-        imagePrompt: thumbnailPrompt,
-        dialogue: `${storyTitle}${partTitle ? ' - ' + partTitle : ''}${storyPart ? ', ' + storyPart : ''}`
-      };
-
-      // Outro CTA scene — like, subscribe, bell icon
-      const outroScene: Scene = {
-        imagePrompt: `Dark cinematic background with glowing Subscribe button, bell notification icon, thumbs up like icon, and "Next Part Coming Soon" text. YouTube end screen style, vibrant red subscribe button, golden bell icon glowing, modern clean design, dark gradient background with magical particles, professional YouTube outro card, 8k, masterpiece.`,
-        dialogue: `अगर यह कहानी पसंद आई तो Like करें, Subscribe करें, और Bell icon 🔔 जरूर दबाएं ताकि अगला part आते ही notification मिल जाए! अगला part जल्दी आ रहा है...`
-      };
-
-      setStoryboardScenes([thumbnailScene, ...data.scenes, outroScene]);
+        setStoryboardScenes([thumbnailScene, ...data.scenes, outroScene]);
+      }
       setIsStoryboardMode(true);
       showToast("Storyboard Generated! Review and Edit.");
+
+      // Update progress for long-form mode
+      if (videoMode === 'long') {
+        setLongFormPhases(prev => prev.map(p =>
+          p.id === 'scene-division' ? { ...p, status: 'complete' } : p
+        ));
+        setLongFormOverallPercent(35);
+      }
     } catch (err: any) {
       console.error(err);
       setError(err.message);
+      if (videoMode === 'long') {
+        setLongFormPhases(prev => prev.map(p =>
+          p.id === 'scene-division' ? { ...p, status: 'error' } : p
+        ));
+      }
     } finally {
       setIsGeneratingStoryboard(false);
     }
@@ -517,7 +643,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
   const handleDownloadThumbnailImage = (index: number) => {
     const scene = storyboardScenes[index];
     if (!scene.imageUrl) return;
-
+    
     const img = new Image();
     img.crossOrigin = "anonymous";
     img.onload = () => {
@@ -526,13 +652,13 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
       cvs.height = aspectRatio === '9:16' ? 1024 : 576;
       const ctx = cvs.getContext('2d');
       if (!ctx) return;
-
+      
       // Draw image
       ctx.drawImage(img, 0, 0, cvs.width, cvs.height);
-
+      
       // Draw gradient and text just like video export
       drawThumbnailText(ctx, cvs.width, cvs.height, scene.dialogue, storyPart, aspectRatio === '9:16');
-
+      
       const link = document.createElement('a');
       link.download = `Thumbnail_${storyTitle}.png`;
       link.href = cvs.toDataURL("image/png");
@@ -545,18 +671,18 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
   const handleGenerateSingleImage = async (index: number) => {
     const scene = storyboardScenes[index];
     if (!scene.imagePrompt) return;
-
+    
     setGeneratingImageIdx(index);
-
+    
     try {
       const imgRes = await fetch('/api/image', {
         method: 'POST',
         body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio, seed: globalSeed + index }),
         headers: { 'Content-Type': 'application/json' }
       });
-
+      
       if (!imgRes.ok) throw new Error('Image generation failed');
-
+      
       const blob = await imgRes.blob();
       if (blob) {
         const objectUrl = URL.createObjectURL(blob);
@@ -583,66 +709,179 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
     setScenes([]);
     setIsStoryboardMode(false);
 
+    // Long-form mode: use SceneBatchProcessor
+    if (videoMode === 'long') {
+      try {
+        setStatus('Generating Assets (Long-Form)...');
+        setProgress(0);
+
+        // Update progress phases
+        setLongFormProgressVisible(true);
+        setLongFormPhases(prev => prev.map(p =>
+          p.id === 'asset-generation'
+            ? { ...p, status: 'in-progress', detail: `Scene 0/${storyboardScenes.length}` }
+            : p
+        ));
+        setLongFormOverallPercent(40);
+
+        const processor = new SceneBatchProcessor();
+        batchProcessorRef.current = processor;
+
+        // Wire progress callbacks to ProgressTracker
+        processor.onProgress((state) => {
+          const pct = state.percentComplete;
+          setProgress(pct);
+          setStatus(`Generating Scene ${state.currentScene} of ${state.totalScenes} (${pct}%)`);
+          setLongFormPhases(prev => prev.map(p =>
+            p.id === 'asset-generation'
+              ? { ...p, detail: `Scene ${state.currentScene}/${state.totalScenes}` }
+              : p
+          ));
+          setLongFormOverallPercent(40 + Math.round(pct * 0.5)); // 40-90% for asset gen
+          setLongFormTimeRemaining(state.estimatedTimeRemaining);
+          setLongFormIsPaused(state.isPaused);
+
+          // Persist assets for recovery
+          const currentAssets = processor.getState().generatedAssets;
+          const cacheScenes = storyboardScenes.map((s, i) => ({
+            index: i,
+            imagePrompt: s.imagePrompt,
+            dialogue: s.dialogue,
+            imageUrl: currentAssets.get(i)?.imageUrl,
+            audioUrl: currentAssets.get(i)?.audioUrl,
+            status: (currentAssets.has(i) ? 'complete' : 'pending') as 'pending' | 'complete' | 'failed',
+          }));
+          saveAssets(sessionId, { sessionId, timestamp: Date.now(), scenes: cacheScenes });
+        });
+
+        // Convert scenes to ExtendedScene format for the batch processor
+        const extendedScenes: ExtendedScene[] = storyboardScenes.map(s => ({
+          imagePrompt: s.imagePrompt,
+          dialogue: s.dialogue,
+          imageUrl: s.imageUrl,
+          audioUrl: s.audioUrl,
+          isThumbnail: s.isThumbnail,
+        }));
+
+        await processor.start(extendedScenes);
+
+        // Gather generated assets into scenes
+        const summary = processor.getSummary();
+        const processorState = processor.getState();
+        const scenesWithAssets: Scene[] = storyboardScenes.map((scene, i) => {
+          const assets = processorState.generatedAssets.get(i);
+          return {
+            ...scene,
+            imageUrl: assets?.imageUrl || scene.imageUrl,
+            audioUrl: assets?.audioUrl || scene.audioUrl,
+          };
+        });
+
+        // Mark asset generation complete
+        setLongFormPhases(prev => prev.map(p =>
+          p.id === 'asset-generation'
+            ? { ...p, status: 'complete', detail: `${summary.successCount} success, ${summary.failedCount} failed` }
+            : p.id === 'export-ready'
+            ? { ...p, status: 'complete' }
+            : p
+        ));
+        setLongFormOverallPercent(95);
+        setLongFormTimeRemaining(0);
+
+        setProgress(100);
+        setStatus('Finalizing Video...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Revoke old object URLs to prevent memory leak
+        scenes.forEach(s => {
+          if (s.imageUrl && s.imageUrl.startsWith('blob:')) URL.revokeObjectURL(s.imageUrl);
+        });
+
+        setScenes(scenesWithAssets);
+        setStatus('Ready');
+        setCurrentSceneIdx(0);
+        showToast(`Long-form video ready! ${summary.totalTimeFormatted} generation time.`);
+        batchProcessorRef.current = null;
+      } catch (err: any) {
+        console.error(err);
+        setError(err.message);
+        setStatus('Error');
+        setLongFormPhases(prev => prev.map(p =>
+          p.id === 'asset-generation' ? { ...p, status: 'error' } : p
+        ));
+        batchProcessorRef.current = null;
+      } finally {
+        setIsGeneratingVideo(false);
+      }
+      return;
+    }
+
+    // Short-form mode: existing inline sequential processing
     try {
       setStatus('Generating Assets...');
       setProgress(0);
-
+      
       const scenesWithAssets = [];
       const totalScenes = storyboardScenes.length;
       let completed = 0;
 
       // Process sequentially (1 by 1) instead of batching to avoid Pollinations 429 Rate Limit
       for (let i = 0; i < totalScenes; i++) {
-        const scene = storyboardScenes[i];
+          const scene = storyboardScenes[i];
+          
+          let imageUrl: string | undefined = undefined;
+          let audioUrl: string | undefined = undefined;
+          
+          const skipImageGen = !!scene.imageUrl;
+          
+          const [imgRes, audioRes] = await Promise.all([
+              skipImageGen
+                ? Promise.resolve({ ok: true })
+                : fetch('/api/image', {
+                    method: 'POST',
+                    body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio, seed: Math.floor(Math.random() * 999999) }),
+                    headers: { 'Content-Type': 'application/json' }
+                }).catch(e => ({ ok: false, statusText: e.message, blob: async () => null })),
+              fetch('/api/tts', {
+                  method: 'POST',
+                  body: JSON.stringify({ text: scene.dialogue }),
+                  headers: { 'Content-Type': 'application/json' }
+              }).catch(e => ({ ok: false, json: async () => ({}) }))
+          ]);
 
-        let imageUrl: string | undefined = undefined;
-        let audioUrl: string | undefined = undefined;
+          if (skipImageGen) {
+             imageUrl = scene.imageUrl;
+          } else if (imgRes.ok) {
+             const blob = await (imgRes as any).blob();
+             if (blob) imageUrl = URL.createObjectURL(blob);
+          }
+          
+          if (audioRes.ok) {
+             const audioData = await (audioRes as any).json();
+             if (audioData.audioUrl) audioUrl = audioData.audioUrl;
+          }
 
-        const skipImageGen = !!scene.imageUrl;
-
-        const [imgRes, audioRes] = await Promise.all([
-          skipImageGen
-            ? Promise.resolve({ ok: true })
-            : fetch('/api/image', {
-              method: 'POST',
-              body: JSON.stringify({ prompt: scene.imagePrompt, style: visualStyle, aspectRatio, seed: globalSeed + i }),
-              headers: { 'Content-Type': 'application/json' }
-            }).catch(e => ({ ok: false, statusText: e.message, blob: async () => null })),
-          fetch('/api/tts', {
-            method: 'POST',
-            body: JSON.stringify({ text: scene.dialogue }),
-            headers: { 'Content-Type': 'application/json' }
-          }).catch(e => ({ ok: false, json: async () => ({}) }))
-        ]);
-
-        if (skipImageGen) {
-          imageUrl = scene.imageUrl;
-        } else if (imgRes.ok) {
-          const blob = await (imgRes as any).blob();
-          if (blob) imageUrl = URL.createObjectURL(blob);
-        }
-
-        if (audioRes.ok) {
-          const audioData = await (audioRes as any).json();
-          if (audioData.audioUrl) audioUrl = audioData.audioUrl;
-        }
-
-        scenesWithAssets.push({ ...scene, imageUrl, audioUrl });
-
-        completed += 1;
-        let currentProgress = Math.round((completed / totalScenes) * 100);
-        setProgress(currentProgress);
-        setStatus(`Generating Scene ${completed} of ${totalScenes} (${currentProgress}%)`);
-
-        if (completed < totalScenes && !skipImageGen) {
-          // Wait 3 seconds before asking for the next image to prevent Rate Limiting
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
+          scenesWithAssets.push({ ...scene, imageUrl, audioUrl });
+          
+          completed += 1;
+          let currentProgress = Math.round((completed / totalScenes) * 100);
+          setProgress(currentProgress);
+          setStatus(`Generating Scene ${completed} of ${totalScenes} (${currentProgress}%)`);
+          
+          if (completed < totalScenes && !skipImageGen) {
+              // Wait 3 seconds before asking for the next image to prevent Rate Limiting
+              await new Promise(resolve => setTimeout(resolve, 3000));
+          }
       }
-
+      
       setProgress(100);
       setStatus('Finalizing Video...');
       await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Revoke old object URLs to prevent memory leak
+      scenes.forEach(s => {
+        if (s.imageUrl && s.imageUrl.startsWith('blob:')) URL.revokeObjectURL(s.imageUrl);
+      });
 
       setScenes(scenesWithAssets);
       setStatus('Ready');
@@ -667,10 +906,10 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
     }
     setIsPlaying(true);
     if (bgmTrack && bgmAudioRef.current) {
-      bgmAudioRef.current.src = bgmTrack;
-      bgmAudioRef.current.volume = bgmVolume / 100;
-      bgmAudioRef.current.loop = true;
-      bgmAudioRef.current.play();
+        bgmAudioRef.current.src = bgmTrack;
+        bgmAudioRef.current.volume = bgmVolume / 100;
+        bgmAudioRef.current.loop = true;
+        bgmAudioRef.current.play();
     }
     playScene(currentSceneIdx === scenes.length - 1 ? 0 : currentSceneIdx);
   };
@@ -688,14 +927,14 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
     const scene = scenes[index];
 
     if (scene.audioUrl && audioRef.current) {
-      audioRef.current.src = scene.audioUrl;
-      audioRef.current.volume = voiceVolume / 100;
-      audioRef.current.play();
-      audioRef.current.onended = () => {
-        playScene(index + 1);
-      };
+        audioRef.current.src = scene.audioUrl;
+        audioRef.current.volume = voiceVolume / 100;
+        audioRef.current.play();
+        audioRef.current.onended = () => {
+            playScene(index + 1);
+        };
     } else {
-      setTimeout(() => playScene(index + 1), 3000);
+        setTimeout(() => playScene(index + 1), 3000);
     }
   };
 
@@ -703,335 +942,536 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
     if (scenes.length === 0) return;
     setIsDownloading(true);
     try {
-      let srtContent = '';
-      let currentTimeMs = 0;
+        let srtContent = '';
+        let currentTimeMs = 0;
 
-      const formatTime = (ms: number) => {
-        const totalSeconds = Math.floor(ms / 1000);
-        const hours = Math.floor(totalSeconds / 3600);
-        const minutes = Math.floor((totalSeconds % 3600) / 60);
-        const seconds = totalSeconds % 60;
-        const milliseconds = Math.floor(ms % 1000);
-        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
-      };
+        const formatTime = (ms: number) => {
+            const totalSeconds = Math.floor(ms / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            const milliseconds = Math.floor(ms % 1000);
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+        };
 
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
 
-      for (let index = 0; index < scenes.length; index++) {
-        const scene = scenes[index];
-        let durationMs = 3000;
-        if (scene.audioUrl) {
-          try {
-            const res = await fetch(scene.audioUrl as string);
-            const arrayBuffer = await res.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-            durationMs = audioBuffer.duration * 1000;
-          } catch (e) {
-            durationMs = scene.dialogue.split(' ').length * 350 + 500;
-          }
+        for (let index = 0; index < scenes.length; index++) {
+            const scene = scenes[index];
+            let durationMs = 3000;
+            if (scene.audioUrl) {
+                try {
+                    const res = await fetch(scene.audioUrl as string);
+                    const arrayBuffer = await res.arrayBuffer();
+                    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                    durationMs = audioBuffer.duration * 1000;
+                } catch(e) {
+                    durationMs = scene.dialogue.split(' ').length * 350 + 500;
+                }
+            }
+            
+            const startTime = formatTime(currentTimeMs);
+            const endTime = formatTime(currentTimeMs + durationMs);
+            
+            srtContent += `${index + 1}\n`;
+            srtContent += `${startTime} --> ${endTime}\n`;
+            srtContent += `${scene.dialogue}\n\n`;
+            
+            currentTimeMs += durationMs;
         }
 
-        const startTime = formatTime(currentTimeMs);
-        const endTime = formatTime(currentTimeMs + durationMs);
-
-        srtContent += `${index + 1}\n`;
-        srtContent += `${startTime} --> ${endTime}\n`;
-        srtContent += `${scene.dialogue}\n\n`;
-
-        currentTimeMs += durationMs;
-      }
-
-      const blob = new Blob([srtContent], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${storyTitle || 'story'}_subtitles.srt`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+        const blob = new Blob([srtContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${storyTitle || 'story'}_subtitles.srt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("SRT Generation failed", err);
+        console.error("SRT Generation failed", err);
     } finally {
-      setIsDownloading(false);
+        setIsDownloading(false);
     }
   };
 
   const handleDownload = async () => {
     if (scenes.length === 0 || isDownloading) return;
-    setIsDownloading(true);
-    setExportProgress(0);
+    console.log(`handleDownload: ${scenes.length} scenes, videoMode=${videoMode}`);
+    console.log('Scene audioUrls:', scenes.map((s, i) => `${i}: ${s.audioUrl ? 'has audio (' + s.audioUrl.slice(0, 30) + '...)' : 'NO AUDIO'}`));
 
-    try {
-      const canvas = canvasRef.current;
-      if (!canvas) throw new Error("Canvas not found");
+    // Long-form mode: use ExportEngine with segmented pipeline
+    if (videoMode === 'long') {
+      setIsDownloading(true);
+      setExportProgress(0);
 
-      canvas.width = aspectRatio === '9:16' ? 576 : 1024;
-      canvas.height = aspectRatio === '9:16' ? 1024 : 576;
+      // Update progress tracker
+      setLongFormProgressVisible(true);
+      setLongFormPhases(prev => prev.map(p =>
+        p.id === 'export-ready' ? { ...p, status: 'in-progress', detail: 'Preparing export...' } : p
+      ));
+      setLongFormOverallPercent(95);
 
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error("Canvas ctx not found");
+      try {
+        const exportEngine = new ExportEngine();
 
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const dest = audioCtx.createMediaStreamDestination();
-
-      let bgmSource: AudioBufferSourceNode | null = null;
-      if (bgmTrack) {
-        try {
-          const response = await fetch(bgmTrack);
-          const arrayBuffer = await response.arrayBuffer();
-          const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
-          bgmSource = audioCtx.createBufferSource();
-          bgmSource.buffer = audioBuffer;
-          bgmSource.loop = true;
-
-          const gainNode = audioCtx.createGain();
-          gainNode.gain.value = bgmVolume / 100;
-
-          bgmSource.connect(gainNode);
-          gainNode.connect(dest);
-          bgmSource.start();
-        } catch (err) {
-          console.error("Failed to load BGM for export:", err);
-        }
-      }
-
-      // @ts-ignore
-      const videoStream = canvas.captureStream(30);
-
-      const combinedStream = new MediaStream([
-        ...videoStream.getVideoTracks(),
-        ...dest.stream.getAudioTracks()
-      ]);
-
-      let options: MediaRecorderOptions = { mimeType: 'video/webm;codecs=vp9,opus' };
-      if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1,mp4a.40.2')) {
-        options = { mimeType: 'video/mp4;codecs=avc1,mp4a.40.2' };
-      } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
-        options = { mimeType: 'video/webm;codecs=vp9,opus' };
-      } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
-        options = { mimeType: 'video/webm;codecs=vp8,opus' };
-      } else if (MediaRecorder.isTypeSupported('video/webm')) {
-        options = { mimeType: 'video/webm' };
-      }
-
-      const recorder = new MediaRecorder(combinedStream, { ...options, videoBitsPerSecond: 5000000 });
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-
-      recorder.start(1000); // Collect data every 1 second for reliability
-
-      const loadedImages = await Promise.all(scenes.map(s => {
-        return new Promise<HTMLImageElement>((resolve) => {
-          const img = new Image();
-          if (s.imageUrl && !s.imageUrl.startsWith('blob:') && !s.imageUrl.startsWith('data:')) {
-            img.crossOrigin = "anonymous";
-          }
-          img.src = s.imageUrl || '';
-          img.onload = () => resolve(img);
-          img.onerror = () => resolve(img);
+        // Wire progress callback
+        exportEngine.onProgress((state) => {
+          const pct = state.progressPercent;
+          setExportProgress(pct);
+          setLongFormPhases(prev => prev.map(p =>
+            p.id === 'export-ready'
+              ? { ...p, detail: `${state.phase} - ${pct}%` }
+              : p
+          ));
+          setLongFormTimeRemaining(state.estimatedTimeRemaining);
         });
-      }));
 
-      let isRecordingProcess = true;
-      let activeExportSceneIdx = 0;
-      let activeExportSceneStartMs = 0;
+        const exportConfig: ExportConfig = {
+          segmentSize: 15,
+          videoBitrate: 5_000_000,
+          audioBitrate: 128_000,
+          fps: 30,
+          resolution: { width: 1920, height: 1080 }, // Always 16:9 for YouTube long-form
+          maxFileSizeBytes: 2_147_483_648, // 2GB
+          kenBurnsZoomRange: [0.05, 0.10],
+          kenBurnsPanRange: [0.05, 0.10],
+        };
 
-      // Pre-calculate all scene durations BEFORE starting recording
-      const sceneDurations: number[] = [];
-      for (let i = 0; i < scenes.length; i++) {
-        if (scenes[i].audioUrl) {
-          try {
-            const res = await fetch(scenes[i].audioUrl as string);
-            const arrayBuffer = await res.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-            sceneDurations.push(audioBuffer.duration * 1000);
-          } catch {
-            sceneDurations.push(3000);
-          }
-        } else {
-          sceneDurations.push(3000);
-        }
-      }
+        const extendedScenes: ExtendedScene[] = scenes.map(s => ({
+          imagePrompt: s.imagePrompt,
+          dialogue: s.dialogue,
+          imageUrl: s.imageUrl,
+          audioUrl: s.audioUrl,
+          isThumbnail: s.isThumbnail,
+        }));
 
-      const drawFrame = () => {
-        if (!isRecordingProcess) return;
+        const blob = await exportEngine.export(extendedScenes, exportConfig, {
+          subtitleStyle: subtitleStyle === 'none' ? 'none' : subtitleStyle,
+          bgmUrl: bgmTrack || undefined,
+          bgmVolume: bgmVolume / 100,
+          narrationVolume: voiceVolume / 100,
+        });
 
-        ctx.fillStyle = "black";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        const sceneIdx = activeExportSceneIdx;
-        const elapsedInScene = activeExportSceneStartMs > 0 ? Date.now() - activeExportSceneStartMs : 0;
-        const durationMs = sceneDurations[sceneIdx] || 3000;
-        const progress = Math.min(1, elapsedInScene / durationMs);
-
-        const scene = scenes[sceneIdx];
-        const img = loadedImages[sceneIdx];
-
-        if (img && img.width > 0) {
-          const canvasRatio = canvas.width / canvas.height;
-          const imgRatio = img.width / img.height;
-
-          let drawWidth, drawHeight;
-          if (canvasRatio > imgRatio) {
-            drawWidth = canvas.width;
-            drawHeight = canvas.width / imgRatio;
-          } else {
-            drawHeight = canvas.height;
-            drawWidth = canvas.height * imgRatio;
-          }
-
-          // Apply Ken Burns zoom (15% zoom over scene duration)
-          const kbZoom = 1.0 + (progress * 0.15);
-          const scaledWidth = drawWidth * kbZoom;
-          const scaledHeight = drawHeight * kbZoom;
-
-          // Base offset to center the image
-          const baseOffsetX = (canvas.width - scaledWidth) / 2;
-          const baseOffsetY = (canvas.height - scaledHeight) / 2;
-
-          // Ken Burns pan (alternating direction per scene)
-          const panDirX = sceneIdx % 2 === 0 ? 1 : -1;
-          const panDirY = sceneIdx % 3 === 0 ? 1 : -1;
-
-          // Move from center by up to 5% of dimensions
-          const panOffsetX = (progress * (scaledWidth * 0.05)) * panDirX;
-          const panOffsetY = (progress * (scaledHeight * 0.05)) * panDirY;
-
-          ctx.drawImage(img, baseOffsetX + panOffsetX, baseOffsetY + panOffsetY, scaledWidth, scaledHeight);
-        }
-
-        if (scene) {
-          if (scene.isThumbnail) {
-            drawThumbnailText(ctx, canvas.width, canvas.height, scene.dialogue, storyPart, aspectRatio === '9:16');
-          } else if (subtitleStyle !== 'none') {
-            const words = scene.dialogue.split(' ');
-            let activeWordIndex = Math.floor((elapsedInScene / durationMs) * words.length);
-            if (isNaN(activeWordIndex) || activeWordIndex < 0) activeWordIndex = 0;
-            if (activeWordIndex >= words.length) activeWordIndex = words.length - 1;
-
-            if (subtitleStyle === 'viral') {
-              ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-              ctx.fillRect(0, canvas.height - 120, canvas.width, 120);
-
-              ctx.textAlign = "center";
-              ctx.shadowColor = "black";
-              ctx.shadowBlur = 4;
-
-              const wordsPerChunk = 6;
-              const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
-              const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
-
-              ctx.fillStyle = "#fbbf24";
-              ctx.font = "bold 40px Arial";
-              ctx.fillText(chunk, canvas.width / 2, canvas.height - 45);
-            } else if (subtitleStyle === 'cinematic') {
-              ctx.textAlign = "center";
-              ctx.shadowColor = "black";
-              ctx.shadowBlur = 8;
-
-              const wordsPerChunk = 5;
-              const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
-              const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
-
-              ctx.fillStyle = "white";
-              ctx.font = "italic 32px Arial";
-              ctx.fillText(chunk, canvas.width / 2, canvas.height - 40);
-            }
-          }
-        }
-
-        if (!isRecordingProcess) {
-          clearInterval(drawInterval);
-          return;
-        }
-        requestAnimationFrame(drawFrame);
-      };
-
-      // Use setInterval as backup to prevent browser throttling on long exports
-      const drawInterval = setInterval(() => {
-        if (!isRecordingProcess) {
-          clearInterval(drawInterval);
-          return;
-        }
-        drawFrame();
-      }, 33); // ~30fps backup via setInterval (doesn't get throttled)
-
-      const processScene = async (idx: number) => {
-        if (idx >= scenes.length) {
-          isRecordingProcess = false;
-          if (bgmSource) bgmSource.stop();
-          recorder.stop();
-          setExportProgress(100);
-          return;
-        }
-
-        // Update export progress
-        setExportProgress(Math.round((idx / scenes.length) * 100));
-
-        const durationMs = sceneDurations[idx] || 3000;
-
-        if (scenes[idx].audioUrl) {
-          try {
-            const res = await fetch(scenes[idx].audioUrl as string);
-            const arrayBuffer = await res.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
-            const source = audioCtx.createBufferSource();
-            source.buffer = audioBuffer;
-
-            const voiceGainNode = audioCtx.createGain();
-            voiceGainNode.gain.value = voiceVolume / 100;
-
-            source.connect(voiceGainNode);
-            voiceGainNode.connect(dest);
-
-            activeExportSceneIdx = idx;
-            activeExportSceneStartMs = Date.now();
-
-            source.start();
-
-            setTimeout(() => processScene(idx + 1), durationMs);
-          } catch (err) {
-            console.error("Audio decode error", err);
-            activeExportSceneIdx = idx;
-            activeExportSceneStartMs = Date.now();
-            setTimeout(() => processScene(idx + 1), 3000);
-          }
-        } else {
-          activeExportSceneIdx = idx;
-          activeExportSceneStartMs = Date.now();
-          setTimeout(() => processScene(idx + 1), durationMs);
-        }
-      };
-
-      audioCtx.resume().then(() => {
-        drawFrame();
-        processScene(0);
-      });
-
-      recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: options.mimeType });
+        // Download the result
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;
-        // Use correct file extension based on actual format
-        const ext = (options.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
-        a.download = `AI_StoryCraft_Video.${ext}`;
+        const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+        a.download = `AI_StoryCraft_LongVideo.${ext}`;
         document.body.appendChild(a);
         a.click();
         URL.revokeObjectURL(url);
+
+        setLongFormPhases(prev => prev.map(p =>
+          p.id === 'export-ready' ? { ...p, status: 'complete', detail: 'Download started' } : p
+        ));
+        setLongFormOverallPercent(100);
+        showToast("Long-form video exported successfully!");
+      } catch (err: any) {
+        console.error(err);
+        setLongFormPhases(prev => prev.map(p =>
+          p.id === 'export-ready' ? { ...p, status: 'error', detail: err.message } : p
+        ));
+        // If partial blob is available from the export engine error state, offer partial download
+        showToast("Export failed: " + err.message);
+      } finally {
         setIsDownloading(false);
-        showToast("Video Exported Successfully!");
-      };
+        setExportProgress(0);
+      }
+      return;
+    }
+
+    // Short-form mode: existing single-pass canvas export
+    setIsDownloading(true);
+    setExportProgress(0);
+    
+    try {
+        const canvas = canvasRef.current;
+        if (!canvas) throw new Error("Canvas not found");
+        
+        canvas.width = aspectRatio === '9:16' ? 720 : 1280;
+        canvas.height = aspectRatio === '9:16' ? 1280 : 720;
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error("Canvas ctx not found");
+
+        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const dest = audioCtx.createMediaStreamDestination();
+        
+        let bgmSource: AudioBufferSourceNode | null = null;
+        if (bgmTrack) {
+            try {
+                const response = await fetch(bgmTrack);
+                const arrayBuffer = await response.arrayBuffer();
+                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+                
+                bgmSource = audioCtx.createBufferSource();
+                bgmSource.buffer = audioBuffer;
+                bgmSource.loop = true;
+                
+                const gainNode = audioCtx.createGain();
+                gainNode.gain.value = bgmVolume / 100;
+                
+                bgmSource.connect(gainNode);
+                gainNode.connect(dest);
+                bgmSource.start();
+            } catch (err) {
+                console.error("Failed to load BGM for export:", err);
+            }
+        }
+
+        // @ts-ignore
+        const videoStream = canvas.captureStream(30); 
+        
+        const combinedStream = new MediaStream([
+            ...videoStream.getVideoTracks(),
+            ...dest.stream.getAudioTracks()
+        ]);
+
+        let options: MediaRecorderOptions = { mimeType: 'video/webm;codecs=vp9,opus' };
+        if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1,mp4a.40.2')) {
+            options = { mimeType: 'video/mp4;codecs=avc1,mp4a.40.2' };
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
+            options = { mimeType: 'video/webm;codecs=vp9,opus' };
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
+            options = { mimeType: 'video/webm;codecs=vp8,opus' };
+        } else if (MediaRecorder.isTypeSupported('video/webm')) {
+            options = { mimeType: 'video/webm' };
+        }
+        
+        const recorder = new MediaRecorder(combinedStream, { ...options, videoBitsPerSecond: 5000000 });
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+        
+        recorder.start(1000); // Collect data every 1 second for reliability
+
+        const loadedImages = await Promise.all(scenes.map(s => {
+            return new Promise<HTMLImageElement | null>((resolve) => {
+                if (!s.imageUrl) {
+                  resolve(null);
+                  return;
+                }
+                const img = new Image();
+                if (s.imageUrl && !s.imageUrl.startsWith('blob:') && !s.imageUrl.startsWith('data:')) {
+                    img.crossOrigin = "anonymous";
+                }
+                img.src = s.imageUrl;
+                img.onload = () => resolve(img);
+                img.onerror = () => resolve(null); // null = will render black frame
+            });
+        }));
+
+        let isRecordingProcess = true;
+        let currentDrawIdx = 0;
+        let exportSceneStartMs = 0;
+        let exportSceneDurationMs = 3000;
+        let recordingStartMs = 0;
+
+        // Pre-fetch and decode all audio ONCE before recording
+        const audioBuffers: (AudioBuffer | null)[] = [];
+        const sceneDurations: number[] = [];
+        for (let i = 0; i < scenes.length; i++) {
+          if (scenes[i].audioUrl) {
+            try {
+              let arrayBuffer: ArrayBuffer;
+              const url = scenes[i].audioUrl as string;
+              
+              // Handle base64 data URLs directly (more reliable than fetch for data URLs)
+              if (url.startsWith('data:')) {
+                const base64Data = url.split(',')[1];
+                const binaryString = atob(base64Data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let j = 0; j < binaryString.length; j++) {
+                  bytes[j] = binaryString.charCodeAt(j);
+                }
+                arrayBuffer = bytes.buffer;
+              } else {
+                const res = await fetch(url);
+                arrayBuffer = await res.arrayBuffer();
+              }
+              
+              const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
+              audioBuffers.push(audioBuffer);
+              // Ensure minimum 2 seconds per scene for proper pacing
+              const duration = Math.max(2000, audioBuffer.duration * 1000);
+              sceneDurations.push(duration);
+            } catch (e) {
+              console.warn(`Failed to decode audio for scene ${i}:`, e);
+              audioBuffers.push(null);
+              sceneDurations.push(4000); // 4 seconds fallback for failed audio
+            }
+          } else {
+            audioBuffers.push(null);
+            sceneDurations.push(4000); // 4 seconds for scenes without audio (thumbnail, etc.)
+          }
+        }
+        
+        console.log('Scene durations (ms):', sceneDurations);
+
+        // Pre-calculate cumulative start times for each scene (for sync)
+        const sceneStartTimes: number[] = [];
+        let cumulativeMs = 0;
+        for (let i = 0; i < sceneDurations.length; i++) {
+          sceneStartTimes.push(cumulativeMs);
+          cumulativeMs += sceneDurations[i];
+        }
+        const totalDuration = cumulativeMs;
+
+        const drawFrame = () => {
+            if (!isRecordingProcess) return;
+            
+            // Reset all canvas state at start of each frame
+            ctx.save();
+            ctx.shadowColor = "transparent";
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+            
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Calculate current scene based on elapsed time (single source of truth for sync)
+            const elapsed = Date.now() - recordingStartMs;
+            let sceneIdx = 0;
+            for (let i = 0; i < sceneStartTimes.length; i++) {
+              if (elapsed >= sceneStartTimes[i]) {
+                sceneIdx = i;
+              } else {
+                break;
+              }
+            }
+            // Clamp to valid range
+            if (sceneIdx >= scenes.length) sceneIdx = scenes.length - 1;
+
+            const scene = scenes[sceneIdx];
+            const img = loadedImages[sceneIdx];
+
+            const elapsedInScene = elapsed - sceneStartTimes[sceneIdx];
+            const sceneDur = sceneDurations[sceneIdx];
+            const progress = Math.min(1, elapsedInScene / sceneDur);
+
+            if (img && img.complete && img.naturalWidth > 0) {
+                const canvasRatio = canvas.width / canvas.height;
+                const imgRatio = img.width / img.height;
+                
+                let drawWidth, drawHeight;
+                if (canvasRatio > imgRatio) {
+                    drawWidth = canvas.width;
+                    drawHeight = canvas.width / imgRatio;
+                } else {
+                    drawHeight = canvas.height;
+                    drawWidth = canvas.height * imgRatio;
+                }
+                
+                // Apply Ken Burns zoom (15% zoom over scene duration)
+                const kbZoom = 1.0 + (progress * 0.15); 
+                const scaledWidth = drawWidth * kbZoom;
+                const scaledHeight = drawHeight * kbZoom;
+                
+                // Base offset to center the image
+                const baseOffsetX = (canvas.width - scaledWidth) / 2;
+                const baseOffsetY = (canvas.height - scaledHeight) / 2;
+                
+                // Ken Burns pan (alternating direction per scene)
+                const panDirX = currentDrawIdx % 2 === 0 ? 1 : -1;
+                const panDirY = currentDrawIdx % 3 === 0 ? 1 : -1;
+                
+                // Move from center by up to 5% of dimensions
+                const panOffsetX = (progress * (scaledWidth * 0.05)) * panDirX;
+                const panOffsetY = (progress * (scaledHeight * 0.05)) * panDirY;
+                
+                ctx.drawImage(img, baseOffsetX + panOffsetX, baseOffsetY + panOffsetY, scaledWidth, scaledHeight);
+            }
+
+            if (scene) {
+                if (scene.isThumbnail) {
+                    drawThumbnailText(ctx, canvas.width, canvas.height, scene.dialogue, storyPart, aspectRatio === '9:16');
+                } else if (subtitleStyle !== 'none') {
+                    const words = scene.dialogue.split(' ');
+                    let activeWordIndex = Math.floor((elapsedInScene / exportSceneDurationMs) * words.length);
+                    if (isNaN(activeWordIndex) || activeWordIndex < 0) activeWordIndex = 0;
+                    if (activeWordIndex >= words.length) activeWordIndex = words.length - 1;
+                    
+                    if (subtitleStyle === 'viral') {
+                        ctx.save();
+                        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+                        ctx.fillRect(0, canvas.height - 150, canvas.width, 150);
+                        
+                        ctx.textAlign = "center";
+                        ctx.shadowColor = "black";
+                        ctx.shadowBlur = 5;
+                        
+                        const wordsPerChunk = 6;
+                        const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
+                        const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
+                        
+                        ctx.fillStyle = "#fbbf24"; 
+                        ctx.font = "bold 52px Arial";
+                        ctx.fillText(chunk, canvas.width / 2, canvas.height - 55);
+                        ctx.restore();
+                    } else if (subtitleStyle === 'cinematic') {
+                        ctx.save();
+                        ctx.textAlign = "center";
+                        ctx.shadowColor = "black";
+                        ctx.shadowBlur = 10;
+                        
+                        const wordsPerChunk = 5;
+                        const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
+                        const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
+                        
+                        ctx.fillStyle = "white"; 
+                        ctx.font = "italic 44px Arial";
+                        ctx.fillText(chunk, canvas.width / 2, canvas.height - 50);
+                        ctx.restore();
+                    }
+                }
+            }
+
+            if (!isRecordingProcess) {
+              clearInterval(drawInterval);
+              ctx.restore();
+              return;
+            }
+            ctx.restore();
+            // setInterval handles the continuous loop — no rAF needed
+        };
+
+        // Use setInterval as backup to prevent browser throttling on long exports
+        const drawInterval = setInterval(() => {
+          if (!isRecordingProcess) {
+            clearInterval(drawInterval);
+            return;
+          }
+          drawFrame();
+        }, 66); // ~15fps backup via setInterval (lighter on CPU, captureStream handles actual framerate)
+
+        const processScene = async (idx: number) => {
+          try {
+            if (idx >= scenes.length) {
+                return; // drawFrame handles stopping via elapsed time
+            }
+            
+            // Update export progress
+            setExportProgress(Math.round((idx / scenes.length) * 100));
+            
+            // Play pre-fetched audio buffer at the correct AudioContext time
+            const buffer = audioBuffers[idx];
+            if (buffer) {
+                try {
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    
+                    const voiceGainNode = audioCtx.createGain();
+                    voiceGainNode.gain.value = voiceVolume / 100;
+                    
+                    source.connect(voiceGainNode);
+                    voiceGainNode.connect(dest);
+                    
+                    // Schedule audio at the exact time this scene should start
+                    const sceneStartSeconds = sceneStartTimes[idx] / 1000;
+                    const audioCtxStart = audioCtx.currentTime + (sceneStartSeconds - (Date.now() - recordingStartMs) / 1000);
+                    source.start(Math.max(audioCtx.currentTime, audioCtx.currentTime));
+                } catch (err) {
+                    console.error("Audio playback error for scene", idx, err);
+                }
+            }
+            
+            console.log(`Scene ${idx}/${scenes.length}: duration=${sceneDurations[idx]}ms, audio=${buffer ? 'yes' : 'no'}`);
+            
+            // Schedule next scene's audio after this scene's duration
+            if (idx + 1 < scenes.length) {
+              setTimeout(() => processScene(idx + 1), sceneDurations[idx]);
+            }
+          } catch (err) {
+            console.error(`processScene(${idx}) error:`, err);
+            if (idx + 1 < scenes.length) {
+              setTimeout(() => processScene(idx + 1), sceneDurations[idx] || 4000);
+            }
+          }
+        };
+
+        audioCtx.resume().then(() => {
+            recordingStartMs = Date.now();
+            const totalSec = Math.round(totalDuration/1000);
+            console.log(`Export starting: ${scenes.length} scenes, total duration: ${totalSec}s`);
+            showToast(`Exporting ${scenes.length} scenes (~${totalSec}s). Please keep this tab open.`);
+            processScene(0);
+            
+            // Stop recording after total duration (using precise timing)
+            setTimeout(() => {
+              if (isRecordingProcess) {
+                isRecordingProcess = false;
+                if (bgmSource) bgmSource.stop();
+                recorder.stop();
+                setExportProgress(100);
+              }
+            }, totalDuration + 1000);
+        });
+
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: options.mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            // Use correct file extension based on actual format
+            const ext = (options.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
+            a.download = `AI_StoryCraft_Video.${ext}`;
+            document.body.appendChild(a);
+            a.click();
+            URL.revokeObjectURL(url);
+            audioCtx.close();
+            setIsDownloading(false);
+            showToast("Video Exported Successfully!");
+        };
 
     } catch (e) {
-      console.error(e);
-      alert("Failed to export video.");
-      setIsDownloading(false);
+        console.error(e);
+        alert("Failed to export video.");
+        setIsDownloading(false);
     }
+  };
+
+  const handleLongFormPause = () => {
+    if (batchProcessorRef.current) {
+      batchProcessorRef.current.pause();
+    }
+  };
+
+  const handleLongFormResume = () => {
+    if (batchProcessorRef.current) {
+      batchProcessorRef.current.resume();
+    }
+  };
+
+  const handleVideoModeSwitch = (newMode: 'short' | 'long') => {
+    if (newMode === videoMode) return;
+    // If switching from long to short and scenes exist, show confirmation
+    if (videoMode === 'long' && newMode === 'short' && storyboardScenes.length > 0) {
+      setShowModeSwitchConfirm(true);
+      return;
+    }
+    setVideoMode(newMode);
+    // Force 16:9 for Long Video mode (YouTube requirement)
+    if (newMode === 'long') {
+      setAspectRatio('16:9');
+    }
+  };
+
+  const confirmModeSwitch = () => {
+    setStoryboardScenes([]);
+    setScenes([]);
+    setIsStoryboardMode(false);
+    setVideoMode('short');
+    setShowModeSwitchConfirm(false);
+    showToast("Switched to Short Video mode. Scene data cleared.");
+  };
+
+  const cancelModeSwitch = () => {
+    setShowModeSwitchConfirm(false);
   };
 
   const handleEditVideo = () => {
@@ -1043,22 +1483,44 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
   };
 
 
-  const activeModalScene = modalImage
-    ? (storyboardScenes.find(s => s.imageUrl === modalImage) || scenes.find(s => s.imageUrl === modalImage))
-    : null;
-
-  const activeModalIdx = activeModalScene
-    ? (storyboardScenes.includes(activeModalScene) ? storyboardScenes.indexOf(activeModalScene) : scenes.indexOf(activeModalScene))
-    : -1;
-
-  const activeModalChar = modalImage
-    ? characters.find(c => c.imageUrl === modalImage)
-    : null;
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 font-sans selection:bg-indigo-500/30">
       <audio ref={audioRef} className="hidden" />
+      <audio ref={bgmAudioRef} className="hidden" />
       <canvas ref={canvasRef} width={800} height={600} className="hidden" />
+
+      {/* Asset Recovery Prompt (Req 4.8) */}
+      <AnimatePresence>
+        {showRecoveryPrompt && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-slate-800 border border-indigo-500/50 text-white px-6 py-4 rounded-xl shadow-2xl max-w-md w-full"
+          >
+            <div className="flex items-start space-x-3">
+              <AlertCircle className="w-5 h-5 text-indigo-400 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <p className="font-medium text-sm mb-3">A previous generation session was found. Would you like to resume where you left off?</p>
+                <div className="flex space-x-3">
+                  <button
+                    onClick={handleResumeRecovery}
+                    className="px-4 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors"
+                  >
+                    Resume previous generation
+                  </button>
+                  <button
+                    onClick={handleStartFresh}
+                    className="px-4 py-1.5 text-xs font-medium bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
+                  >
+                    Start fresh
+                  </button>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Toast Notification */}
       <AnimatePresence>
@@ -1075,7 +1537,81 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
         )}
       </AnimatePresence>
 
+      {/* Image Preview Modal */}
+      <AnimatePresence>
+        {modalImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 cursor-pointer"
+            onClick={() => setModalImage(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.8, opacity: 0 }}
+              className="relative max-w-4xl w-full max-h-[85vh] cursor-default"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img 
+                src={modalImage} 
+                alt="Preview" 
+                className="w-full h-full object-contain rounded-2xl shadow-2xl"
+              />
+              <button
+                onClick={() => setModalImage(null)}
+                className="absolute top-3 right-3 w-10 h-10 bg-black/60 hover:bg-black/80 text-white rounded-full flex items-center justify-center transition-colors"
+              >
+                <XCircle className="w-6 h-6" />
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
+      {/* Mode Switch Confirmation Dialog */}
+      <AnimatePresence>
+        {showModeSwitchConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4"
+            >
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                  <AlertCircle className="w-5 h-5 text-amber-400" />
+                </div>
+                <h3 className="text-lg font-semibold text-white">Switch to Short Video?</h3>
+              </div>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                Switching to Short Video mode will clear all existing scene data. This action cannot be undone.
+              </p>
+              <div className="flex items-center justify-end space-x-3 pt-2">
+                <button
+                  onClick={cancelModeSwitch}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmModeSwitch}
+                  className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-amber-600 hover:bg-amber-500 transition-colors shadow-lg"
+                >
+                  Confirm
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-indigo-500/20 blur-[120px] rounded-full" />
@@ -1088,12 +1624,103 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
       {/* MAIN APP SECTION */}
       <section id="app-section" className="relative max-w-7xl mx-auto px-6 pt-32 pb-12 min-h-screen flex flex-col justify-start">
         <div className="grid lg:grid-cols-2 gap-12 w-full">
-
+          
           {/* LEFT SIDE: SCRIPT / SCENE EDITOR */}
           <div className="space-y-6">
+            {/* Video Mode Toggle */}
+            <div className="flex flex-col space-y-4">
+              <div className="flex items-center space-x-1 bg-slate-900/80 backdrop-blur-xl rounded-xl border border-slate-800 p-1">
+                <button
+                  onClick={() => handleVideoModeSwitch('short')}
+                  className={`flex-1 flex items-center justify-center space-x-2 py-2.5 px-4 rounded-lg font-medium text-sm transition-all ${
+                    videoMode === 'short'
+                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  <Video className="w-4 h-4" />
+                  <span>Short Video</span>
+                </button>
+                <button
+                  onClick={() => handleVideoModeSwitch('long')}
+                  className={`flex-1 flex items-center justify-center space-x-2 py-2.5 px-4 rounded-lg font-medium text-sm transition-all ${
+                    videoMode === 'long'
+                      ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/25'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  <Scissors className="w-4 h-4" />
+                  <span>Long Video</span>
+                </button>
+              </div>
+
+              {/* Target Duration Slider (visible only in Long Video mode) */}
+              {videoMode === 'long' && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="bg-slate-900/80 backdrop-blur-xl rounded-xl border border-purple-500/30 p-4 space-y-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-purple-300 flex items-center space-x-2">
+                      <Zap className="w-4 h-4" />
+                      <span>Target Duration</span>
+                    </label>
+                    <span className="text-sm font-bold text-purple-200 bg-purple-500/20 px-2.5 py-0.5 rounded-md border border-purple-500/30">
+                      {targetDurationMinutes} min
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="8"
+                    max="18"
+                    step="1"
+                    value={targetDurationMinutes}
+                    onChange={(e) => setTargetDurationMinutes(Number(e.target.value))}
+                    className="w-full accent-purple-500 cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-slate-500">
+                    <span>8 min</span>
+                    <span>13 min</span>
+                    <span>18 min</span>
+                  </div>
+                </motion.div>
+              )}
+            </div>
+
+            {/* Estimated Duration & Generation Time Indicators (Long Video mode only) */}
+            {videoMode === 'long' && storyboardScenes.length > 0 && (
+              <div className="flex items-center space-x-3">
+                <div className="flex items-center space-x-1.5 bg-slate-900/80 backdrop-blur-xl rounded-lg border border-purple-500/20 px-3 py-1.5">
+                  <Clock className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="text-xs font-medium text-purple-300">Est. Duration:</span>
+                  <span className="text-xs font-bold text-purple-100">{estimatedDuration?.formattedDuration ?? '00:00'}</span>
+                </div>
+                <div className="flex items-center space-x-1.5 bg-slate-900/80 backdrop-blur-xl rounded-lg border border-amber-500/20 px-3 py-1.5">
+                  <Timer className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-xs font-medium text-amber-300">Gen. Time:</span>
+                  <span className="text-xs font-bold text-amber-100">{generationTimeEstimate ?? '00:00'}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Progress Tracker for Long-Form Video mode */}
+            {videoMode === 'long' && (
+              <ProgressTracker
+                phases={longFormPhases}
+                overallPercent={longFormOverallPercent}
+                estimatedTimeRemaining={longFormTimeRemaining}
+                isVisible={longFormProgressVisible}
+                isPaused={longFormIsPaused}
+                onPause={handleLongFormPause}
+                onResume={handleLongFormResume}
+              />
+            )}
+
             <AnimatePresence mode="wait">
               {!isStoryboardMode ? (
-                <motion.div
+                <motion.div 
                   key="script-editor"
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -1102,37 +1729,32 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                 >
                   <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500/50 to-purple-500/50 rounded-3xl blur opacity-25 transition duration-1000" />
                   <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-3xl border border-slate-800 p-6 shadow-2xl flex flex-col h-[calc(100vh-12rem)] min-h-[600px]">
-
+                    
                     {/* Tabs Header */}
                     <div className="flex space-x-2 border-b border-slate-800 pb-4 mb-4">
                       <button
                         onClick={() => setActiveTab('script')}
-                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${activeTab === 'script' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
-                          }`}
+                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                          activeTab === 'script' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
+                        }`}
                       >
                         <PenTool className="w-4 h-4" />
                         <span>Script</span>
                       </button>
                       <button
                         onClick={() => setActiveTab('characters')}
-                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${activeTab === 'characters' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
-                          }`}
+                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                          activeTab === 'characters' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
+                        }`}
                       >
                         <MessageSquare className="w-4 h-4" />
                         <span>Characters</span>
                       </button>
                       <button
-                        onClick={() => setActiveTab('characters')}
-                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${activeTab === 'characters' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
-                          }`}
-                      >
-                        <Users className="w-4 h-4" />
-                        <span>Characters</span>
-                      </button>
-                      <button
                         onClick={() => setActiveTab('settings')}
-                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${activeTab === 'settings' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
-                          }`}
+                        className={`flex-1 flex items-center justify-center space-x-2 py-2.5 rounded-lg font-medium text-sm transition-all ${
+                          activeTab === 'settings' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 hover:text-white'
+                        }`}
                       >
                         <Settings className="w-4 h-4" />
                         <span>Settings</span>
@@ -1154,7 +1776,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               <ImageIcon className="w-4 h-4 text-indigo-400" />
                               <span>Visual Style</span>
                             </label>
-                            <select
+                            <select 
                               value={visualStyle}
                               onChange={(e) => setVisualStyle(e.target.value)}
                               className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
@@ -1167,7 +1789,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               <Music className="w-4 h-4 text-pink-400" />
                               <span>Background Music</span>
                             </label>
-                            <select
+                            <select 
                               value={bgmTrack}
                               onChange={(e) => setBgmTrack(e.target.value)}
                               className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
@@ -1180,7 +1802,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               <Smartphone className="w-4 h-4 text-emerald-400" />
                               <span>Aspect Ratio</span>
                             </label>
-                            <select
+                            <select 
                               value={aspectRatio}
                               onChange={(e) => setAspectRatio(e.target.value as any)}
                               className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
@@ -1194,7 +1816,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               <Globe className="w-4 h-4 text-cyan-400" />
                               <span>Dubbing Lang</span>
                             </label>
-                            <select
+                            <select 
                               value={targetLanguage}
                               onChange={(e) => setTargetLanguage(e.target.value)}
                               className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
@@ -1207,7 +1829,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               <Volume2 className="w-4 h-4 text-orange-400" />
                               <span>BGM Volume: {bgmVolume}%</span>
                             </label>
-                            <input
+                            <input 
                               type="range" min="0" max="100" value={bgmVolume} onChange={(e) => setBgmVolume(Number(e.target.value))}
                               className="w-full accent-orange-500 cursor-pointer"
                             />
@@ -1217,7 +1839,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               <Mic className="w-4 h-4 text-violet-400" />
                               <span>Voice Volume: {voiceVolume}%</span>
                             </label>
-                            <input
+                            <input 
                               type="range" min="0" max="100" value={voiceVolume} onChange={(e) => setVoiceVolume(Number(e.target.value))}
                               className="w-full accent-violet-500 cursor-pointer"
                             />
@@ -1227,7 +1849,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               <Type className="w-4 h-4 text-yellow-400" />
                               <span>Subtitle Style</span>
                             </label>
-                            <select
+                            <select 
                               value={subtitleStyle}
                               onChange={(e) => setSubtitleStyle(e.target.value as any)}
                               className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 cursor-pointer"
@@ -1295,7 +1917,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               {/* Character reference image */}
                               <div className="flex items-center space-x-3">
                                 {char.imageUrl && (
-                                  <div
+                                  <div 
                                     className="w-20 h-20 rounded-lg overflow-hidden border border-slate-700 shrink-0 cursor-pointer hover:border-violet-500 transition-colors"
                                     onClick={() => setModalImage(char.imageUrl!)}
                                   >
@@ -1340,7 +1962,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                           {/* Brainstorm Engine */}
                           <div className="bg-indigo-900/20 rounded-2xl border border-indigo-500/30 overflow-hidden shrink-0">
                             {/* Collapsible Header */}
-                            <button
+                            <button 
                               onClick={() => setIsUniverseOpen(!isUniverseOpen)}
                               className="w-full flex items-center justify-between p-4 bg-indigo-950/30 hover:bg-indigo-900/40 transition-colors border-b border-indigo-500/20"
                             >
@@ -1355,7 +1977,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                             {/* Collapsible Content */}
                             <AnimatePresence>
                               {isUniverseOpen && (
-                                <motion.div
+                                <motion.div 
                                   initial={{ height: 0, opacity: 0 }}
                                   animate={{ height: "auto", opacity: 1 }}
                                   exit={{ height: 0, opacity: 0 }}
@@ -1366,7 +1988,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                                       <ImageIcon className="w-4 h-4" />
                                       <span>Main Characters</span>
                                     </label>
-                                    <textarea
+                                    <textarea 
                                       value={characterProfile}
                                       onChange={(e) => setCharacterProfile(e.target.value)}
                                       placeholder="Describe your main character here to keep them EXACTLY same in all images... (e.g. A 20yr old Indian boy with messy hair, wearing a white shirt)"
@@ -1380,7 +2002,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                                       <Globe className="w-4 h-4" />
                                       <span>Main Location</span>
                                     </label>
-                                    <textarea
+                                    <textarea 
                                       value={locationProfile}
                                       onChange={(e) => setLocationProfile(e.target.value)}
                                       placeholder="Describe the environment to keep it consistent... (e.g. A creepy old Victorian bungalow with a red roof)"
@@ -1412,7 +2034,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                                 <span>Magic Brainstorm Idea</span>
                               </label>
                               <div className="flex flex-col sm:flex-row space-y-3 sm:space-y-0 sm:space-x-3">
-                                <input
+                                <input 
                                   type="text"
                                   placeholder="E.g., A horror story about a cursed mirror..."
                                   value={idea}
@@ -1420,7 +2042,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                                   className="flex-1 bg-slate-900/50 border border-indigo-500/50 text-slate-200 rounded-xl px-4 py-3 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20"
                                   onKeyDown={(e) => e.key === 'Enter' && handleBrainstorm()}
                                 />
-                                <button
+                                <button 
                                   onClick={handleBrainstorm}
                                   disabled={isBrainstorming || !idea}
                                   className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold px-6 py-3 rounded-xl transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] disabled:shadow-none flex items-center justify-center space-x-2 whitespace-nowrap"
@@ -1464,7 +2086,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                             placeholder="एक छोटे से गाँव में..."
                             className="w-full flex-1 min-h-[200px] bg-slate-950/50 rounded-xl p-4 resize-none outline-none text-lg text-slate-200 placeholder:text-slate-600 custom-scrollbar border border-transparent focus:border-indigo-500/30 transition-colors"
                           />
-
+                          
                           <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-800 shrink-0">
                             <span className="text-sm text-slate-500 font-medium">
                               {script.length} characters
@@ -1484,7 +2106,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                   </div>
                 </motion.div>
               ) : (
-                <motion.div
+                <motion.div 
                   key="scene-editor"
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -1493,26 +2115,37 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                 >
                   <div className="absolute -inset-1 bg-gradient-to-r from-emerald-500/50 to-teal-500/50 rounded-3xl blur opacity-25 transition duration-1000" />
                   <div className="relative bg-slate-900/80 backdrop-blur-xl rounded-3xl border border-slate-800 p-6 shadow-2xl flex flex-col h-[calc(100vh-12rem)] min-h-[600px]">
-
+                    
                     <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-semibold flex items-center space-x-2">
-                        <Edit3 className="w-5 h-5 text-emerald-400" />
-                        <span>Scene Editor</span>
-                      </h3>
-                      <button onClick={() => setIsStoryboardMode(false)} className="text-sm text-slate-400 hover:text-white transition-colors">
-                        &larr; Back to Script
-                      </button>
+                       <h3 className="text-lg font-semibold flex items-center space-x-2">
+                         <Edit3 className="w-5 h-5 text-emerald-400" />
+                         <span>Scene Editor</span>
+                       </h3>
+                       <button onClick={() => setIsStoryboardMode(false)} className="text-sm text-slate-400 hover:text-white transition-colors">
+                          &larr; Back to Script
+                       </button>
                     </div>
+
+                    {/* Script Preview */}
+                    {script && (
+                      <div className="mb-4 bg-slate-950/50 rounded-xl border border-slate-800 p-3 max-h-[120px] overflow-y-auto custom-scrollbar">
+                        <p className="text-xs font-medium text-slate-500 mb-1 flex items-center space-x-1">
+                          <FileText className="w-3 h-3" />
+                          <span>Script</span>
+                        </p>
+                        <p className="text-sm text-slate-400 leading-relaxed">{script.slice(0, 500)}{script.length > 500 ? '...' : ''}</p>
+                      </div>
+                    )}
 
                     <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
                       {storyboardScenes.map((scene, idx) => (
                         <div key={idx}>
-                          <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800 space-y-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-bold text-slate-500 bg-slate-900 px-2 py-1 rounded-md">{scene.isThumbnail ? 'THUMBNAIL' : `SCENE ${idx + 1}`}</span>
+                        <div className="bg-slate-950/50 p-4 rounded-xl border border-slate-800 space-y-3">
+                           <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-slate-500 bg-slate-900 px-2 py-1 rounded-md">{scene.isThumbnail ? 'THUMBNAIL' : (scene as any).isOutro ? 'OUTRO' : `SCENE ${idx}`}</span>
                               <div className="flex space-x-2">
                                 {!scene.isThumbnail && (
-                                  <button
+                                  <button 
                                     onClick={() => handleDeleteScene(idx)}
                                     className="text-xs font-bold bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white px-2 py-1 rounded-md transition-colors flex items-center space-x-1"
                                     title="Delete scene"
@@ -1521,7 +2154,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                                   </button>
                                 )}
                                 {scene.isThumbnail && scene.imageUrl && (
-                                  <button
+                                  <button 
                                     onClick={() => handleDownloadThumbnailImage(idx)}
                                     className="text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white px-3 py-1 rounded-md transition-colors flex items-center space-x-1 shadow-lg"
                                   >
@@ -1529,7 +2162,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                                     <span>Download</span>
                                   </button>
                                 )}
-                                <button
+                                <button 
                                   onClick={() => handleGenerateSingleImage(idx)}
                                   disabled={generatingImageIdx === idx}
                                   className="text-xs font-bold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-70 text-white px-3 py-1 rounded-md transition-colors flex items-center space-x-1 shadow-lg"
@@ -1547,109 +2180,96 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                                   )}
                                 </button>
                               </div>
-                            </div>
-                            <div className="space-y-1">
+                           </div>
+                           <div className="space-y-1">
                               <label className="text-xs text-slate-400 ml-1">Dialogue (Hindi)</label>
-                              <input
-                                type="text"
+                              <input 
+                                type="text" 
                                 value={scene.dialogue}
                                 onChange={(e) => updateScene(idx, 'dialogue', e.target.value)}
                                 className="w-full bg-slate-800/50 rounded-lg px-3 py-2 text-sm outline-none border border-transparent focus:border-emerald-500/50 text-slate-200"
                               />
-                            </div>
-                            <div className="space-y-1">
+                           </div>
+                           <div className="space-y-1">
                               <label className="text-xs text-slate-400 ml-1">Image Prompt (English)</label>
-                              <textarea
+                              <textarea 
                                 value={scene.imagePrompt}
                                 onChange={(e) => updateScene(idx, 'imagePrompt', e.target.value)}
                                 rows={2}
                                 className="w-full bg-slate-800/50 rounded-lg px-3 py-2 text-sm outline-none border border-transparent focus:border-emerald-500/50 resize-none text-slate-200"
                               />
-                            </div>
-
-                            {/* Custom Image Upload */}
-                            <div className="space-y-1">
+                           </div>
+                           
+                           {/* Custom Image Upload */}
+                           <div className="space-y-1">
                               <label className="text-xs text-slate-400 ml-1 flex items-center space-x-1">
-                                <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />
-                                <span>Custom Image (Optional)</span>
+                                 <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />
+                                 <span>Custom Image (Optional)</span>
                               </label>
-
+                              
                               {scene.imageUrl ? (
-                                <div className="relative group/img w-full h-32 rounded-lg overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer" onClick={() => setModalImage(scene.imageUrl!)}>
-                                  <img
-                                    src={scene.imageUrl}
-                                    alt={`Scene ${idx + 1} Custom Image`}
-                                    className="w-full h-full object-cover"
-                                  />
-                                  {scene.isThumbnail && (
-                                    <div className="absolute inset-0 flex flex-col items-start justify-center p-4 pointer-events-none bg-gradient-to-r from-black/95 via-black/50 to-transparent space-y-1">
-                                      {scene.dialogue.replace(/, Part \d+/i, '').split(' ').slice(0, 5).map((w, i) => (
-                                        <span key={i} className={`text-xl font-black ${i % 2 !== 0 ? 'text-amber-400' : 'text-white'} drop-shadow-[0_3px_3px_rgba(0,0,0,1)] uppercase leading-none`} style={{ WebkitTextStroke: '1.5px black' }}>
-                                          {w}
-                                        </span>
-                                      ))}
-                                      <div className="bg-black px-3 py-1 mt-3 rounded-lg border-2 border-amber-400 shadow-xl">
-                                        <span className="text-xs font-black text-amber-400">{storyPart}</span>
-                                      </div>
+                                 <div className="relative group/img w-full h-32 rounded-lg overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer" onClick={() => setModalImage(scene.imageUrl!)}>
+                                    <img 
+                                       src={scene.imageUrl} 
+                                       alt={`Scene ${idx + 1} Custom Image`} 
+                                       className="w-full h-full object-cover"
+                                    />
+                                    {scene.isThumbnail && (
+                                       <div className="absolute inset-0 flex flex-col items-start justify-center p-4 pointer-events-none bg-gradient-to-r from-black/95 via-black/50 to-transparent space-y-1">
+                                          {scene.dialogue.replace(/, Part \d+/i, '').split(' ').slice(0, 5).map((w, i) => (
+                                            <span key={i} className={`text-xl font-black ${i % 2 !== 0 ? 'text-amber-400' : 'text-white'} drop-shadow-[0_3px_3px_rgba(0,0,0,1)] uppercase leading-none`} style={{ WebkitTextStroke: '1.5px black' }}>
+                                              {w}
+                                            </span>
+                                          ))}
+                                          <div className="bg-black px-3 py-1 mt-3 rounded-lg border-2 border-amber-400 shadow-xl">
+                                             <span className="text-xs font-black text-amber-400">{storyPart}</span>
+                                          </div>
+                                       </div>
+                                    )}
+                                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center space-x-3">
+                                       <label className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg">
+                                          <Upload className="w-3.5 h-3.5" />
+                                          <span>Change</span>
+                                          <input 
+                                             type="file" 
+                                             accept="image/*" 
+                                             className="hidden" 
+                                             onChange={(e) => handleImageUpload(idx, e)}
+                                          />
+                                       </label>
+                                       <button 
+                                          onClick={() => handleRemoveImage(idx)}
+                                          className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg"
+                                       >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                          <span>Remove</span>
+                                       </button>
                                     </div>
-                                  )}
-                                  <div
-                                    className="absolute inset-0 bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center space-x-2"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); setModalImage(scene.imageUrl!); }}
-                                      className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg cursor-pointer"
-                                    >
-                                      <Eye className="w-3.5 h-3.5" />
-                                      <span>View</span>
-                                    </button>
-                                    <label
-                                      className="cursor-pointer bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg"
-                                      onClick={(e) => e.stopPropagation()}
-                                    >
-                                      <Upload className="w-3.5 h-3.5" />
-                                      <span>Change</span>
-                                      <input
-                                        type="file"
-                                        accept="image/*"
-                                        className="hidden"
-                                        onChange={(e) => handleImageUpload(idx, e)}
-                                      />
-                                    </label>
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); handleRemoveImage(idx); }}
-                                      className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold px-3 py-2 rounded-lg transition-colors flex items-center space-x-1 shadow-lg cursor-pointer"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                      <span>Remove</span>
-                                    </button>
-                                  </div>
-                                </div>
+                                 </div>
                               ) : (
-                                <label className="flex flex-col items-center justify-center w-full h-20 border border-dashed border-slate-700 hover:border-emerald-500/50 rounded-lg cursor-pointer bg-slate-900/30 hover:bg-slate-900/50 transition-all group/upload">
-                                  <div className="flex flex-col items-center justify-center space-y-1">
-                                    <Upload className="w-5 h-5 text-slate-500 group-hover/upload:text-emerald-400 transition-colors" />
-                                    <span className="text-xs text-slate-400 group-hover/upload:text-slate-300">Click to upload custom image</span>
-                                  </div>
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    className="hidden"
-                                    onChange={(e) => handleImageUpload(idx, e)}
-                                  />
-                                </label>
+                                 <label className="flex flex-col items-center justify-center w-full h-20 border border-dashed border-slate-700 hover:border-emerald-500/50 rounded-lg cursor-pointer bg-slate-900/30 hover:bg-slate-900/50 transition-all group/upload">
+                                    <div className="flex flex-col items-center justify-center space-y-1">
+                                       <Upload className="w-5 h-5 text-slate-500 group-hover/upload:text-emerald-400 transition-colors" />
+                                       <span className="text-xs text-slate-400 group-hover/upload:text-slate-300">Click to upload custom image</span>
+                                    </div>
+                                    <input 
+                                       type="file" 
+                                       accept="image/*" 
+                                       className="hidden" 
+                                       onChange={(e) => handleImageUpload(idx, e)}
+                                    />
+                                 </label>
                               )}
-                            </div>
-                          </div>
-                          {/* Add Scene button between scenes */}
-                          <button
-                            onClick={() => handleAddScene(idx)}
-                            className="w-full flex items-center justify-center py-2 my-1 text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg border border-dashed border-slate-800 hover:border-emerald-500/50 transition-all group"
-                            title="Add new scene here"
-                          >
-                            <Plus className="w-4 h-4 group-hover:scale-110 transition-transform" />
-                          </button>
+                           </div>
+                        </div>
+                        {/* Add Scene button between scenes */}
+                        <button
+                          onClick={() => handleAddScene(idx)}
+                          className="w-full flex items-center justify-center py-2 my-1 text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg border border-dashed border-slate-800 hover:border-emerald-500/50 transition-all group"
+                          title="Add new scene here"
+                        >
+                          <Plus className="w-4 h-4 group-hover:scale-110 transition-transform" />
+                        </button>
                         </div>
                       ))}
                     </div>
@@ -1679,9 +2299,9 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
           </div>
 
           {/* RIGHT SIDE: VIDEO PLAYER */}
-          <div className="flex flex-col">
-            <div className="flex-1 bg-slate-900/50 backdrop-blur-xl border border-slate-800/80 rounded-3xl relative overflow-hidden flex items-center justify-center h-[calc(100vh-12rem)] min-h-[600px] shadow-2xl">
-
+          <div className="flex flex-col justify-center">
+            <div className="w-full bg-slate-900/50 backdrop-blur-xl border border-slate-800/80 rounded-3xl relative overflow-hidden flex items-center justify-center aspect-video shadow-2xl">
+              
               <AnimatePresence mode="wait">
                 {isGeneratingVideo ? (
                   <motion.div
@@ -1695,10 +2315,10 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                       <div className="absolute inset-0 bg-indigo-500 blur-xl opacity-30 animate-pulse rounded-full" />
                       <svg className="w-full h-full -rotate-90 transform" viewBox="0 0 100 100">
                         <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="8" className="text-slate-800" />
-                        <motion.circle
-                          cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="8"
+                        <motion.circle 
+                          cx="50" cy="50" r="45" fill="none" stroke="currentColor" strokeWidth="8" 
                           strokeDasharray="283" strokeDashoffset={283 - (283 * progress) / 100}
-                          className="text-indigo-500 transition-all duration-500 ease-out"
+                          className="text-indigo-500 transition-all duration-500 ease-out" 
                         />
                       </svg>
                       <div className="absolute inset-0 flex items-center justify-center text-lg font-bold text-white">
@@ -1718,86 +2338,86 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                     className="absolute inset-0 bg-black overflow-hidden flex flex-col items-center justify-center group"
                   >
                     {scenes[currentSceneIdx]?.imageUrl ? (
-                      <motion.img
+                      <motion.img 
                         key={currentSceneIdx}
-                        src={scenes[currentSceneIdx].imageUrl}
-                        alt="Story Scene"
+                        src={scenes[currentSceneIdx].imageUrl} 
+                        alt="Story Scene" 
                         className="absolute inset-0 w-full h-full object-cover"
                         initial={{ scale: 1, opacity: 0 }}
                         animate={{ scale: isPlaying ? 1.05 : 1, opacity: 1 }}
                         transition={{ scale: { duration: 8, ease: "linear" }, opacity: { duration: 0.5 } }}
                       />
                     ) : (
-                      <div className="absolute inset-0 flex items-center justify-center bg-slate-800 text-slate-400 text-sm">
-                        Image Failed to Load
-                      </div>
+                       <div className="absolute inset-0 flex items-center justify-center bg-slate-800 text-slate-400 text-sm">
+                         Image Failed to Load
+                       </div>
                     )}
-
+                    
                     {/* Controls Overlay */}
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center space-y-6">
-                      <button
-                        onClick={handlePlay}
-                        className="w-20 h-20 bg-indigo-500/80 backdrop-blur-md rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(99,102,241,0.4)] hover:scale-105 transition-transform"
-                      >
-                        {isPlaying ? (
-                          <Pause className="w-8 h-8 text-white" />
-                        ) : (
-                          <Play className="w-8 h-8 ml-1 text-white" />
-                        )}
-                      </button>
+                       <button 
+                         onClick={handlePlay}
+                         className="w-20 h-20 bg-indigo-500/80 backdrop-blur-md rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(99,102,241,0.4)] hover:scale-105 transition-transform"
+                       >
+                         {isPlaying ? (
+                           <Pause className="w-8 h-8 text-white" />
+                         ) : (
+                           <Play className="w-8 h-8 ml-1 text-white" />
+                         )}
+                       </button>
                     </div>
 
                     {/* Captions & Titles */}
-                    <motion.div
+                    <motion.div 
                       initial={{ y: 20, opacity: 0 }}
                       animate={{ y: 0, opacity: 1 }}
-                      key={'caption' + currentSceneIdx}
+                      key={'caption'+currentSceneIdx}
                       className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
                     >
-                      {scenes[currentSceneIdx]?.isThumbnail ? (
-                        <div className={`absolute inset-0 bg-gradient-to-r from-black/95 via-black/70 to-transparent flex flex-col ${aspectRatio === '9:16' ? 'items-center bg-gradient-to-b' : 'items-start'} justify-center p-12 space-y-4`}>
-                          <div className="flex flex-col space-y-2">
-                            {scenes[currentSceneIdx]?.dialogue.replace(/, Part \d+/i, '').split(' ').filter(Boolean).reduce((acc: string[][], word: string, i: number, arr: string[]) => {
-                              if (arr.length <= 3) acc.push([word]);
-                              else if (arr.length <= 6) {
-                                if (i % 2 === 0) acc.push([word]);
-                                else acc[acc.length - 1].push(word);
-                              } else {
-                                if (i % 3 === 0) acc.push([word]);
-                                else acc[acc.length - 1].push(word);
-                              }
-                              return acc;
-                            }, []).map((lineWords, i) => (
-                              <h1 key={i} className={`text-6xl md:text-8xl font-black ${i % 2 !== 0 ? 'text-amber-400' : 'text-white'} drop-shadow-[0_5px_5px_rgba(0,0,0,1)] uppercase tracking-tight`} style={{ WebkitTextStroke: '3px black', lineHeight: '1.1' }}>
-                                {lineWords.join(' ')}
-                              </h1>
-                            ))}
-                          </div>
-                          <div className="bg-black px-6 py-3 rounded-xl border-4 border-amber-400 shadow-[0_5px_15px_rgba(0,0,0,0.8)] mt-6 inline-block">
-                            <span className="text-2xl md:text-3xl font-black text-amber-400">
-                              {storyPart}
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="absolute bottom-16 left-8 right-8 text-center flex flex-col items-center">
-                          <p className="text-3xl md:text-5xl font-black text-amber-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)] uppercase">
-                            {isPlaying ? activeCaptionChunk : scenes[currentSceneIdx]?.dialogue}
-                          </p>
-                        </div>
-                      )}
+                       {scenes[currentSceneIdx]?.isThumbnail ? (
+                         <div className={`absolute inset-0 bg-gradient-to-r from-black/95 via-black/70 to-transparent flex flex-col ${aspectRatio === '9:16' ? 'items-center bg-gradient-to-b' : 'items-start'} justify-center p-12 space-y-4`}>
+                           <div className="flex flex-col space-y-2">
+                             {scenes[currentSceneIdx]?.dialogue.replace(/, Part \d+/i, '').split(' ').filter(Boolean).reduce((acc: string[][], word: string, i: number, arr: string[]) => {
+                                if (arr.length <= 3) acc.push([word]);
+                                else if (arr.length <= 6) {
+                                  if (i % 2 === 0) acc.push([word]);
+                                  else acc[acc.length-1].push(word);
+                                } else {
+                                  if (i % 3 === 0) acc.push([word]);
+                                  else acc[acc.length-1].push(word);
+                                }
+                                return acc;
+                             }, []).map((lineWords, i) => (
+                               <h1 key={i} className={`text-6xl md:text-8xl font-black ${i % 2 !== 0 ? 'text-amber-400' : 'text-white'} drop-shadow-[0_5px_5px_rgba(0,0,0,1)] uppercase tracking-tight`} style={{ WebkitTextStroke: '3px black', lineHeight: '1.1' }}>
+                                 {lineWords.join(' ')}
+                               </h1>
+                             ))}
+                           </div>
+                           <div className="bg-black px-6 py-3 rounded-xl border-4 border-amber-400 shadow-[0_5px_15px_rgba(0,0,0,0.8)] mt-6 inline-block">
+                             <span className="text-2xl md:text-3xl font-black text-amber-400">
+                               {storyPart}
+                             </span>
+                           </div>
+                         </div>
+                       ) : (
+                         <div className="absolute bottom-16 left-8 right-8 text-center flex flex-col items-center">
+                           <p className="text-3xl md:text-5xl font-black text-amber-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)] uppercase">
+                             {isPlaying ? activeCaptionChunk : scenes[currentSceneIdx]?.dialogue}
+                           </p>
+                         </div>
+                       )}
                     </motion.div>
 
                     <div className="absolute bottom-6 left-6 right-6 flex items-center space-x-4">
                       {isPlaying && (
                         <div className="flex space-x-1 items-end h-4 mr-2">
-                          <motion.div animate={{ height: ["4px", "16px", "4px"] }} transition={{ repeat: Infinity, duration: 0.8 }} className="w-1 bg-white rounded-t-sm" />
-                          <motion.div animate={{ height: ["8px", "12px", "8px"] }} transition={{ repeat: Infinity, duration: 1.2 }} className="w-1 bg-white rounded-t-sm" />
-                          <motion.div animate={{ height: ["12px", "6px", "12px"] }} transition={{ repeat: Infinity, duration: 0.9 }} className="w-1 bg-white rounded-t-sm" />
+                           <motion.div animate={{ height: ["4px", "16px", "4px"] }} transition={{ repeat: Infinity, duration: 0.8 }} className="w-1 bg-white rounded-t-sm" />
+                           <motion.div animate={{ height: ["8px", "12px", "8px"] }} transition={{ repeat: Infinity, duration: 1.2 }} className="w-1 bg-white rounded-t-sm" />
+                           <motion.div animate={{ height: ["12px", "6px", "12px"] }} transition={{ repeat: Infinity, duration: 0.9 }} className="w-1 bg-white rounded-t-sm" />
                         </div>
                       )}
                       <div className="h-1 flex-1 bg-slate-800/80 rounded-full overflow-hidden backdrop-blur-md">
-                        {isPlaying && <motion.div className="h-full bg-indigo-500" initial={{ width: "0%" }} animate={{ width: "100%" }} transition={{ duration: scenes.length ? (1 / scenes.length) * 100 : 0 }} />}
+                        {isPlaying && <motion.div className="h-full bg-indigo-500" initial={{ width: "0%" }} animate={{ width: "100%" }} transition={{ duration: scenes.length ? (1/scenes.length) * 100 : 0 }} />}
                       </div>
                     </div>
                   </motion.div>
@@ -1816,191 +2436,74 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                 )}
               </AnimatePresence>
 
+              {/* Download button inside video player */}
+              {status === 'Ready' && scenes.length > 0 && !isGeneratingVideo && (
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center space-x-3">
+                  <button 
+                    onClick={handleDownload}
+                    disabled={isDownloading}
+                    className="flex items-center space-x-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-full font-semibold transition-all shadow-[0_0_20px_rgba(79,70,229,0.4)] disabled:opacity-50 text-sm backdrop-blur-sm hover:scale-105"
+                  >
+                    {isDownloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    <span>{isDownloading ? `Exporting... ${exportProgress}%` : 'Export MP4'}</span>
+                  </button>
+                  {isDownloading && (
+                    <div className="w-32 bg-slate-800/80 rounded-full h-2 overflow-hidden backdrop-blur-sm">
+                      <div 
+                        className="bg-indigo-500 h-full rounded-full transition-all duration-500" 
+                        style={{ width: `${exportProgress}%` }}
+                      />
+                    </div>
+                  )}
+                  <button 
+                    onClick={handleEditVideo}
+                    className="flex items-center space-x-2 px-5 py-2.5 bg-slate-800/80 hover:bg-slate-700 border border-slate-700 rounded-full font-semibold transition-all text-sm backdrop-blur-sm text-slate-300 hover:text-white hover:scale-105"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                    <span>Edit</span>
+                  </button>
+                </div>
+              )}
+
             </div>
           </div>
         </div>
 
-        {/* BOTTOM ACTIONS (EXPORT MP4 & EDIT) */}
-        {status === 'Ready' && scenes.length > 0 && (
-          <motion.div
+        {/* BOTTOM ACTIONS (EXPORT MP4 & EDIT) - hidden, moved inside player */}
+        {false && status === 'Ready' && scenes.length > 0 && (
+          <motion.div 
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             className="mt-8 flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-6"
           >
-            <button
-              onClick={handleDownload}
-              disabled={isDownloading}
-              className="flex items-center space-x-2 px-8 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-full font-bold transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] disabled:opacity-50 text-lg w-full sm:w-auto justify-center hover:scale-105"
-            >
-              {isDownloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-              <span>{isDownloading ? `Exporting... ${exportProgress}%` : 'Export as MP4'}</span>
-            </button>
-
-            {isDownloading && (
-              <div className="w-full sm:w-64 bg-slate-800 rounded-full h-3 overflow-hidden">
-                <div
-                  className="bg-indigo-500 h-full rounded-full transition-all duration-500"
-                  style={{ width: `${exportProgress}%` }}
-                />
-              </div>
-            )}
-
-            <button
-              onClick={handleEditVideo}
-              className="flex items-center space-x-2 px-8 py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-full font-bold transition-all w-full sm:w-auto justify-center text-lg hover:scale-105 text-slate-300 hover:text-white"
-            >
-              <Edit3 className="w-5 h-5" />
-              <span>Edit Scenes & Regenerate</span>
-            </button>
+             <button 
+               onClick={handleDownload}
+               disabled={isDownloading}
+               className="flex items-center space-x-2 px-8 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-full font-bold transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] disabled:opacity-50 text-lg w-full sm:w-auto justify-center hover:scale-105"
+             >
+               {isDownloading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
+               <span>{isDownloading ? `Exporting... ${exportProgress}%` : 'Export as MP4'}</span>
+             </button>
+             
+             {isDownloading && (
+               <div className="w-full sm:w-64 bg-slate-800 rounded-full h-3 overflow-hidden">
+                 <div 
+                   className="bg-indigo-500 h-full rounded-full transition-all duration-500" 
+                   style={{ width: `${exportProgress}%` }}
+                 />
+               </div>
+             )}
+             
+             <button 
+               onClick={handleEditVideo}
+               className="flex items-center space-x-2 px-8 py-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-full font-bold transition-all w-full sm:w-auto justify-center text-lg hover:scale-105 text-slate-300 hover:text-white"
+             >
+               <Edit3 className="w-5 h-5" />
+               <span>Edit Scenes & Regenerate</span>
+             </button>
           </motion.div>
         )}
       </section>
-
-      {/* Lightbox Modal for Full Image Preview */}
-      <AnimatePresence>
-        {modalImage && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setModalImage(null)}
-            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md cursor-zoom-out"
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-              className="relative max-w-4xl w-full bg-slate-900/95 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl flex flex-col cursor-default"
-            >
-              {/* Close Button */}
-              <button
-                onClick={() => setModalImage(null)}
-                className="absolute top-4 right-4 bg-slate-950/80 hover:bg-slate-800 text-slate-400 hover:text-white p-2.5 rounded-full transition-colors z-10 border border-slate-700/30"
-                title="Close"
-              >
-                <XCircle className="w-6 h-6" />
-              </button>
-
-              {/* Main Image Container */}
-              <div className="p-6 flex flex-col items-center justify-center">
-                <div className="relative w-full flex items-center justify-center rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-inner">
-                  <img
-                    src={modalImage}
-                    alt="Full preview image"
-                    className="max-h-[60vh] object-contain rounded-2xl"
-                  />
-                </div>
-              </div>
-
-              {/* Info panel for scenes */}
-              {activeModalScene && (
-                <div className="bg-slate-950/90 border-t border-slate-800/85 p-6 space-y-3">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-xs font-bold text-slate-400 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-md">
-                      {activeModalScene.isThumbnail ? 'THUMBNAIL' : `SCENE ${activeModalIdx + 1}`}
-                    </span>
-                  </div>
-                  {activeModalScene.dialogue && (
-                    <div className="space-y-1">
-                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Dialogue</span>
-                      <p className="text-md font-bold text-amber-400 leading-snug">{activeModalScene.dialogue}</p>
-                    </div>
-                  )}
-                  {activeModalScene.imagePrompt && (
-                    <div className="space-y-1">
-                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Image Prompt</span>
-                      <p className="text-xs text-slate-300 bg-slate-900/60 p-3 rounded-xl border border-slate-800/40 select-all font-mono leading-relaxed max-h-24 overflow-y-auto custom-scrollbar">
-                        {activeModalScene.imagePrompt}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Info panel for characters */}
-              {activeModalChar && (
-                <div className="bg-slate-950/90 border-t border-slate-800/85 p-6 space-y-3">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-xs font-bold text-violet-400 bg-violet-950/30 border border-violet-900/50 px-2.5 py-1 rounded-md">
-                      CHARACTER
-                    </span>
-                  </div>
-                  {activeModalChar.name && (
-                    <div className="space-y-1">
-                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Name</span>
-                      <p className="text-md font-bold text-violet-300 leading-snug">{activeModalChar.name}</p>
-                    </div>
-                  )}
-                  {activeModalChar.description && (
-                    <div className="space-y-1">
-                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider block">Visual Description</span>
-                      <p className="text-xs text-slate-300 bg-slate-900/60 p-3 rounded-xl border border-slate-800/40 select-all font-mono leading-relaxed max-h-24 overflow-y-auto custom-scrollbar">
-                        {activeModalChar.description}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Export Progress Modal */}
-      <AnimatePresence>
-        {isDownloading && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md"
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl flex flex-col items-center text-center space-y-6"
-            >
-              <div className="w-16 h-16 bg-indigo-500/10 rounded-2xl flex items-center justify-center text-indigo-400 animate-pulse border border-indigo-500/20">
-                <Loader2 className="w-8 h-8 animate-spin" />
-              </div>
-              
-              <div className="space-y-2">
-                <h3 className="text-xl font-bold text-white">Exporting Video</h3>
-                <p className="text-sm text-slate-400">
-                  We are rendering and compiling your scenes. This may take a few minutes.
-                </p>
-              </div>
-
-              {/* Progress Bar */}
-              <div className="w-full space-y-2">
-                <div className="flex justify-between text-xs font-bold text-slate-400">
-                  <span>Progress</span>
-                  <span className="text-indigo-400">{exportProgress}%</span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700/50">
-                  <div
-                    className="bg-indigo-500 h-full rounded-full transition-all duration-300"
-                    style={{ width: `${exportProgress}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Warning Alert Box */}
-              <div className="w-full bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 text-left flex items-start space-x-3">
-                <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <span className="text-xs font-bold text-amber-400 uppercase tracking-wider block">Important</span>
-                  <p className="text-xs text-amber-200/80 leading-relaxed">
-                    Please **keep this tab active and visible**. Do not minimize this window or switch to other tabs. If the browser tab is hidden, the video generation will be throttled, resulting in a cut-off or out-of-sync download.
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
