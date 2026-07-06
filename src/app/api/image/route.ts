@@ -18,16 +18,18 @@ export async function POST(req: Request) {
     }
     
     const imageSeed = seed !== undefined ? seed : Math.floor(Math.random() * 999999);
-    const qualityPrefix = `Masterpiece, best quality, perfect face, detailed eyes, symmetrical face, beautiful lighting, ${visualStyle}`;
-    const encodedPrompt = encodeURIComponent(`${qualityPrefix}, ${prompt}`);
-    const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${imageSeed}&nofeed=true&negative=deformed,ugly,bad+anatomy,disfigured,poorly+drawn+face,mutation,extra+limbs,blurry`;
+    const qualityPrefix = `Masterpiece, best quality, beautiful lighting, ${visualStyle}`;
+    // Truncate prompt if too long (Pollinations has URL length limits)
+    const safePrompt = prompt.length > 500 ? prompt.slice(0, 500) : prompt;
+    const encodedPrompt = encodeURIComponent(`${qualityPrefix}, ${safePrompt}`);
+    const imageApiUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&nologo=true&seed=${imageSeed}&nofeed=true&negative=deformed,ugly,bad+anatomy,disfigured`;
 
     // Retry logic — up to 3 attempts with increasing delay
     let lastError: unknown = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout per attempt
+        const timeoutId = setTimeout(() => controller.abort(), 90000); // 90s timeout per attempt
 
         const response = await fetch(imageApiUrl, { signal: controller.signal });
         clearTimeout(timeoutId);

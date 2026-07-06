@@ -48,120 +48,149 @@ const BGM_TRACKS = [
 const LANGUAGES = ["Hindi", "English", "Spanish", "German"];
 
 const drawThumbnailText = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number, dialogue: string, part: string, isPortrait: boolean) => {
-    // dialogue format: "StoryTitle - PartTitle, Part X" or "StoryTitle, Part X"
-    // Parse the parts
+    // Parse story name, part title, and part number from dialogue
     let storyName = dialogue;
     let partTitle = '';
     let partNum = part || 'PART 1';
 
-    // Extract part number from dialogue if present (e.g., ", Part 1" or ", Part-1" or ", Part - 1" or ", PART-1")
     const partMatch = dialogue.match(/,\s*(Part[\s\-]*\d+)/i);
     if (partMatch) {
       partNum = partMatch[1].replace(/[\s\-]+/g, ' ').trim().toUpperCase();
       storyName = dialogue.replace(/,\s*Part[\s\-]*\d+/i, '').trim();
     }
 
-    // Extract part title if present (after " - ")
     const titleMatch = storyName.match(/^(.+?)\s*-\s*(.+)$/);
     if (titleMatch) {
       storyName = titleMatch[1].trim();
       partTitle = titleMatch[2].trim();
     }
 
-    // Dark gradient overlay on left side for text readability
-    const gradient = isPortrait 
-        ? ctx.createLinearGradient(0, 0, 0, canvasHeight * 0.6)
-        : ctx.createLinearGradient(0, 0, canvasWidth * 0.65, 0);
-        
-    gradient.addColorStop(0, "rgba(0,0,0,0.92)");
-    gradient.addColorStop(0.6, "rgba(0,0,0,0.6)");
-    gradient.addColorStop(1, "rgba(0,0,0,0)");
+    // === GRADIENT OVERLAY — bottom-heavy for text readability ===
+    const gradient = ctx.createLinearGradient(0, canvasHeight * 0.3, 0, canvasHeight);
+    gradient.addColorStop(0, "rgba(0,0,0,0)");
+    gradient.addColorStop(0.4, "rgba(0,0,0,0.7)");
+    gradient.addColorStop(1, "rgba(0,0,0,0.95)");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    const leftMargin = isPortrait ? canvasWidth / 2 : 60;
-    ctx.textAlign = isPortrait ? "center" : "left";
+    // Also add a subtle top gradient for the part badge
+    const topGradient = ctx.createLinearGradient(0, 0, 0, canvasHeight * 0.2);
+    topGradient.addColorStop(0, "rgba(0,0,0,0.7)");
+    topGradient.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = topGradient;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight * 0.2);
 
-    // === PART NUMBER — Red pill badge, top-left ===
-    const pillW = 180;
-    const pillH = 50;
-    const pillX = isPortrait ? (canvasWidth - pillW) / 2 : leftMargin;
-    const pillY = isPortrait ? 60 : 40;
+    // === PART NUMBER — Gradient pill badge ===
+    const pillH = isPortrait ? 40 : 44;
+    const pillX = isPortrait ? canvasWidth / 2 : 40; // Center for portrait
+    const pillY = isPortrait ? 50 : 30;
+    
+    const pillFontSize = isPortrait ? 20 : 22;
+    ctx.font = `bold ${pillFontSize}px 'Arial Black', Impact, sans-serif`;
+    const partTextWidth = ctx.measureText(partNum.toUpperCase()).width;
+    const pillW = partTextWidth + 40;
+    const actualPillX = isPortrait ? (canvasWidth - pillW) / 2 : pillX;
 
-    ctx.fillStyle = "#FF3B30";
+    // Gradient red-orange pill
+    const pillGradient = ctx.createLinearGradient(actualPillX, pillY, actualPillX + pillW, pillY + pillH);
+    pillGradient.addColorStop(0, "#FF4444");
+    pillGradient.addColorStop(1, "#FF6B00");
+    ctx.fillStyle = pillGradient;
     ctx.beginPath();
-    ctx.roundRect(pillX, pillY, pillW, pillH, 25);
+    ctx.roundRect(actualPillX, pillY, pillW, pillH, 22);
     ctx.fill();
 
+    // Pill text
     ctx.fillStyle = "#ffffff";
-    ctx.font = "bold 28px 'Arial Black', Impact, sans-serif";
+    ctx.font = `bold ${pillFontSize}px 'Arial Black', Impact, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(partNum.toUpperCase(), pillX + pillW / 2, pillY + pillH / 2);
+    ctx.fillText(partNum.toUpperCase(), actualPillX + pillW / 2, pillY + pillH / 2);
 
-    // === STORY TITLE — Large white text with golden glow ===
+    // === STORY TITLE — Max 2-3 lines, centered for portrait, left for landscape ===
     ctx.textAlign = isPortrait ? "center" : "left";
-    ctx.textBaseline = "top";
-    const titleFontSize = isPortrait ? 70 : 90;
-    const titleY = isPortrait ? 140 : 120;
-
+    ctx.textBaseline = "bottom";
+    
+    // Calculate font size to fit
+    const maxTitleWidth = canvasWidth * (isPortrait ? 0.8 : 0.85);
+    let titleFontSize = isPortrait ? 52 : 72;
     ctx.font = `900 ${titleFontSize}px 'Arial Black', Impact, sans-serif`;
     
-    // Black stroke for readability
-    ctx.lineWidth = 12;
-    ctx.strokeStyle = "black";
-    ctx.strokeText(storyName, leftMargin, titleY);
+    // Word wrap into max 2 lines
+    const words = storyName.split(/\s+/);
+    let line1 = '';
+    let line2 = '';
+    let onLine2 = false;
     
-    // Golden glow
-    ctx.shadowColor = "rgba(255, 213, 79, 0.6)";
-    ctx.shadowBlur = 20;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
+    for (const word of words) {
+      const testLine = onLine2 ? (line2 + ' ' + word).trim() : (line1 + ' ' + word).trim();
+      const testWidth = ctx.measureText(testLine).width;
+      
+      if (!onLine2 && testWidth > maxTitleWidth) {
+        onLine2 = true;
+        line2 = word;
+      } else if (onLine2) {
+        line2 = testLine;
+      } else {
+        line1 = testLine;
+      }
+    }
     
-    // White fill
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(storyName, leftMargin, titleY);
-    ctx.shadowColor = "transparent";
-
-    // === PART TITLE — Black pill container with golden text ===
-    if (partTitle) {
-      const ptFontSize = isPortrait ? 36 : 42;
-      ctx.font = `bold ${ptFontSize}px 'Arial Black', sans-serif`;
-      const ptTextWidth = ctx.measureText(partTitle).width;
-      const ptPillW = ptTextWidth + 50;
-      const ptPillH = isPortrait ? 55 : 60;
-      const ptY = titleY + titleFontSize + 30;
-      const ptX = isPortrait ? (canvasWidth - ptPillW) / 2 : leftMargin;
-
-      // Black pill background
-      ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
-      ctx.beginPath();
-      ctx.roundRect(ptX, ptY, ptPillW, ptPillH, 30);
-      ctx.fill();
-
-      // Golden border
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = "#FFD54F";
-      ctx.beginPath();
-      ctx.roundRect(ptX, ptY, ptPillW, ptPillH, 30);
-      ctx.stroke();
-
-      // Golden text
-      ctx.fillStyle = "#FFD54F";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(partTitle, ptX + ptPillW / 2, ptY + ptPillH / 2);
+    if (!line2) {
+      line1 = storyName;
     }
 
-    // === BOTTOM — "Hindi Story" branding ===
-    const brandY = canvasHeight - (isPortrait ? 80 : 60);
-    const brandX = isPortrait ? canvasWidth / 2 : leftMargin;
-    ctx.textAlign = isPortrait ? "center" : "left";
-    ctx.textBaseline = "middle";
+    // Position title at bottom area
+    const titleBottomY = partTitle ? canvasHeight - (isPortrait ? 120 : 100) : canvasHeight - (isPortrait ? 80 : 60);
+    const lineHeight = titleFontSize * 1.15;
+    const titleY1 = line2 ? titleBottomY - lineHeight : titleBottomY;
+    const titleY2 = titleBottomY;
+    const titleX = isPortrait ? canvasWidth / 2 : 50;
+
+    // Draw title line 1
+    ctx.font = `900 ${titleFontSize}px 'Arial Black', Impact, sans-serif`;
     
-    ctx.font = "italic 24px Georgia, serif";
-    ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
-    ctx.fillText("✨ Hindi Story", brandX, brandY);
+    // Black stroke outline
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = "black";
+    ctx.lineJoin = "round";
+    ctx.strokeText(line1, titleX, titleY1);
+    
+    // White fill with subtle glow
+    ctx.shadowColor = "rgba(255, 255, 255, 0.3)";
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(line1, titleX, titleY1);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+
+    // Draw title line 2 (if exists)
+    if (line2) {
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = "black";
+      ctx.strokeText(line2, titleX, titleY2);
+      
+      ctx.shadowColor = "rgba(255, 255, 255, 0.3)";
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(line2, titleX, titleY2);
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+    }
+
+    // === PART TITLE — Small golden text below title (if exists) ===
+    if (partTitle) {
+      const ptFontSize = isPortrait ? 26 : 32;
+      ctx.font = `bold ${ptFontSize}px 'Arial', sans-serif`;
+      ctx.textAlign = isPortrait ? "center" : "left";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#FFD700";
+      ctx.shadowColor = "rgba(0,0,0,0.8)";
+      ctx.shadowBlur = 6;
+      ctx.fillText(partTitle, titleX, titleBottomY + 10);
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+    }
 };
 
 export default function Home() {
@@ -171,7 +200,7 @@ export default function Home() {
   const [script, setScript] = useState('');
   const [visualStyle, setVisualStyle] = useState(VISUAL_STYLES[0]);
   const [bgmTrack, setBgmTrack] = useState(BGM_TRACKS[0].url);
-  const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
+  const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('9:16');
   const [targetLanguage, setTargetLanguage] = useState(LANGUAGES[0]);
   const [characterProfile, setCharacterProfile] = useState('A young Indian boy with big expressive eyes, brown hair, wearing a simple brown shirt and a sling bag strap');
   const [locationProfile, setLocationProfile] = useState('A creepy 19th-century Victorian bungalow with broken windows and a red roof');
@@ -246,6 +275,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [modalImage, setModalImage] = useState<string | null>(null);
+  const [modalIsThumbnail, setModalIsThumbnail] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const bgmAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -459,25 +489,12 @@ export default function Home() {
 
   // Generate the fixed thumbnail prompt template — only story name, part, part title change
   const getThumbnailPrompt = () => {
-    // Use characters from Characters tab if available, otherwise fall back to characterProfile
     const mainChar = characters.find(c => c.name && c.description);
-    const charDescription = mainChar
-      ? `On the right side, ${mainChar.description}, holding or interacting with the KEY OBJECT from the story title "${storyTitle}". The key object must be PROMINENTLY VISIBLE and GLOWING.`
-      : characterProfile
-        ? `On the right side, ${characterProfile}, holding or interacting with the KEY OBJECT from the story title "${storyTitle}". The key object must be PROMINENTLY VISIBLE and GLOWING.`
-        : '';
+    const charDesc = mainChar?.description || characterProfile || 'main character with shocked expression';
+    const storyObject = storyTitle.trim() || 'mysterious story';
     
-    const storyObject = storyTitle.trim();
-    
-    return `Cinematic YouTube thumbnail background image in 16:9 (1280x720). Dark, mysterious, high-contrast fantasy setting with dramatic volumetric lighting. 
-
-MOST IMPORTANT: The story is called "${storyObject}" — the KEY OBJECT/CONCEPT from this title MUST be prominently visible and glowing in the image.
-
-${charDescription}
-
-The character should have a dramatic expression (shocked, curious, or amazed). Mysterious magical particles floating around. Fantasy atmosphere, cinematic rim lighting, dark moody background with magical glow. Leave the LEFT SIDE relatively empty/dark for text overlay space.
-
-Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube thumbnail composition, 8k, masterpiece.`;
+    // Keep prompt concise (under 400 chars) for reliable Pollinations generation
+    return `YouTube thumbnail, Pixar 3D style, ${charDesc}, dramatic expression, dark cinematic background, ${storyObject} concept glowing, vibrant colors, close-up, volumetric lighting, 8k masterpiece`;
   };
 
   // Save/Load thumbnail base from localStorage for consistent series look
@@ -681,7 +698,10 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
         headers: { 'Content-Type': 'application/json' }
       });
       
-      if (!imgRes.ok) throw new Error('Image generation failed');
+      if (!imgRes.ok) {
+        const errorData = await imgRes.json().catch(() => ({}));
+        throw new Error(errorData.error || `Image generation failed (${imgRes.status}). Try again in a few seconds.`);
+      }
       
       const blob = await imgRes.blob();
       if (blob) {
@@ -998,440 +1018,94 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
 
   const handleDownload = async () => {
     if (scenes.length === 0 || isDownloading) return;
-    console.log(`handleDownload: ${scenes.length} scenes, videoMode=${videoMode}`);
-    console.log('Scene audioUrls:', scenes.map((s, i) => `${i}: ${s.audioUrl ? 'has audio (' + s.audioUrl.slice(0, 30) + '...)' : 'NO AUDIO'}`));
-
-    // Long-form mode: use ExportEngine with segmented pipeline
-    if (videoMode === 'long') {
-      setIsDownloading(true);
-      setExportProgress(0);
-
-      // Update progress tracker
-      setLongFormProgressVisible(true);
-      setLongFormPhases(prev => prev.map(p =>
-        p.id === 'export-ready' ? { ...p, status: 'in-progress', detail: 'Preparing export...' } : p
-      ));
-      setLongFormOverallPercent(95);
-
-      try {
-        const exportEngine = new ExportEngine();
-
-        // Wire progress callback
-        exportEngine.onProgress((state) => {
-          const pct = state.progressPercent;
-          setExportProgress(pct);
-          setLongFormPhases(prev => prev.map(p =>
-            p.id === 'export-ready'
-              ? { ...p, detail: `${state.phase} - ${pct}%` }
-              : p
-          ));
-          setLongFormTimeRemaining(state.estimatedTimeRemaining);
-        });
-
-        const exportConfig: ExportConfig = {
-          segmentSize: 15,
-          videoBitrate: 5_000_000,
-          audioBitrate: 128_000,
-          fps: 30,
-          resolution: { width: 1920, height: 1080 }, // Always 16:9 for YouTube long-form
-          maxFileSizeBytes: 2_147_483_648, // 2GB
-          kenBurnsZoomRange: [0.05, 0.10],
-          kenBurnsPanRange: [0.05, 0.10],
-        };
-
-        const extendedScenes: ExtendedScene[] = scenes.map(s => ({
-          imagePrompt: s.imagePrompt,
-          dialogue: s.dialogue,
-          imageUrl: s.imageUrl,
-          audioUrl: s.audioUrl,
-          isThumbnail: s.isThumbnail,
-        }));
-
-        const blob = await exportEngine.export(extendedScenes, exportConfig, {
-          subtitleStyle: subtitleStyle === 'none' ? 'none' : subtitleStyle,
-          bgmUrl: bgmTrack || undefined,
-          bgmVolume: bgmVolume / 100,
-          narrationVolume: voiceVolume / 100,
-        });
-
-        // Download the result
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
-        a.download = `AI_StoryCraft_LongVideo.${ext}`;
-        document.body.appendChild(a);
-        a.click();
-        URL.revokeObjectURL(url);
-
-        setLongFormPhases(prev => prev.map(p =>
-          p.id === 'export-ready' ? { ...p, status: 'complete', detail: 'Download started' } : p
-        ));
-        setLongFormOverallPercent(100);
-        showToast("Long-form video exported successfully!");
-      } catch (err: any) {
-        console.error(err);
-        setLongFormPhases(prev => prev.map(p =>
-          p.id === 'export-ready' ? { ...p, status: 'error', detail: err.message } : p
-        ));
-        // If partial blob is available from the export engine error state, offer partial download
-        showToast("Export failed: " + err.message);
-      } finally {
-        setIsDownloading(false);
-        setExportProgress(0);
-      }
-      return;
-    }
-
-    // Short-form mode: existing single-pass canvas export
+    
     setIsDownloading(true);
     setExportProgress(0);
+    showToast('Preparing assets for server-side FFmpeg export...');
     
     try {
-        const canvas = canvasRef.current;
-        if (!canvas) throw new Error("Canvas not found");
+      // Prepare scenes data for the export API
+      // Convert blob URLs to base64 (blob URLs are local and can't be sent to server)
+      const exportScenes = await Promise.all(scenes.map(async (s) => {
+        let imageUrl = s.imageUrl || '';
+        let audioUrl = s.audioUrl || '';
         
-        canvas.width = aspectRatio === '9:16' ? 720 : 1280;
-        canvas.height = aspectRatio === '9:16' ? 1280 : 720;
-        
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error("Canvas ctx not found");
-
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const dest = audioCtx.createMediaStreamDestination();
-        
-        let bgmSource: AudioBufferSourceNode | null = null;
-        if (bgmTrack) {
-            try {
-                const response = await fetch(bgmTrack);
-                const arrayBuffer = await response.arrayBuffer();
-                const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-                
-                bgmSource = audioCtx.createBufferSource();
-                bgmSource.buffer = audioBuffer;
-                bgmSource.loop = true;
-                
-                const gainNode = audioCtx.createGain();
-                gainNode.gain.value = bgmVolume / 100;
-                
-                bgmSource.connect(gainNode);
-                gainNode.connect(dest);
-                bgmSource.start();
-            } catch (err) {
-                console.error("Failed to load BGM for export:", err);
-            }
-        }
-
-        // @ts-ignore
-        const videoStream = canvas.captureStream(30); 
-        
-        const combinedStream = new MediaStream([
-            ...videoStream.getVideoTracks(),
-            ...dest.stream.getAudioTracks()
-        ]);
-
-        let options: MediaRecorderOptions = { mimeType: 'video/webm;codecs=vp9,opus' };
-        if (MediaRecorder.isTypeSupported('video/mp4;codecs=avc1,mp4a.40.2')) {
-            options = { mimeType: 'video/mp4;codecs=avc1,mp4a.40.2' };
-        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
-            options = { mimeType: 'video/webm;codecs=vp9,opus' };
-        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')) {
-            options = { mimeType: 'video/webm;codecs=vp8,opus' };
-        } else if (MediaRecorder.isTypeSupported('video/webm')) {
-            options = { mimeType: 'video/webm' };
-        }
-        
-        const recorder = new MediaRecorder(combinedStream, { ...options, videoBitsPerSecond: 5000000 });
-        const chunks: Blob[] = [];
-        recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-        
-        recorder.start(1000); // Collect data every 1 second for reliability
-
-        const loadedImages = await Promise.all(scenes.map(s => {
-            return new Promise<HTMLImageElement | null>((resolve) => {
-                if (!s.imageUrl) {
-                  resolve(null);
-                  return;
-                }
-                const img = new Image();
-                if (s.imageUrl && !s.imageUrl.startsWith('blob:') && !s.imageUrl.startsWith('data:')) {
-                    img.crossOrigin = "anonymous";
-                }
-                img.src = s.imageUrl;
-                img.onload = () => resolve(img);
-                img.onerror = () => resolve(null); // null = will render black frame
-            });
-        }));
-
-        let isRecordingProcess = true;
-        let currentDrawIdx = 0;
-        let exportSceneStartMs = 0;
-        let exportSceneDurationMs = 3000;
-        let recordingStartMs = 0;
-
-        // Pre-fetch and decode all audio ONCE before recording
-        const audioBuffers: (AudioBuffer | null)[] = [];
-        const sceneDurations: number[] = [];
-        for (let i = 0; i < scenes.length; i++) {
-          if (scenes[i].audioUrl) {
-            try {
-              let arrayBuffer: ArrayBuffer;
-              const url = scenes[i].audioUrl as string;
-              
-              // Handle base64 data URLs directly (more reliable than fetch for data URLs)
-              if (url.startsWith('data:')) {
-                const base64Data = url.split(',')[1];
-                const binaryString = atob(base64Data);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let j = 0; j < binaryString.length; j++) {
-                  bytes[j] = binaryString.charCodeAt(j);
-                }
-                arrayBuffer = bytes.buffer;
-              } else {
-                const res = await fetch(url);
-                arrayBuffer = await res.arrayBuffer();
-              }
-              
-              const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-              audioBuffers.push(audioBuffer);
-              // Ensure minimum 2 seconds per scene for proper pacing
-              const duration = Math.max(2000, audioBuffer.duration * 1000);
-              sceneDurations.push(duration);
-            } catch (e) {
-              console.warn(`Failed to decode audio for scene ${i}:`, e);
-              audioBuffers.push(null);
-              sceneDurations.push(4000); // 4 seconds fallback for failed audio
-            }
-          } else {
-            audioBuffers.push(null);
-            sceneDurations.push(4000); // 4 seconds for scenes without audio (thumbnail, etc.)
-          }
-        }
-        
-        console.log('Scene durations (ms):', sceneDurations);
-
-        // Pre-calculate cumulative start times for each scene (for sync)
-        const sceneStartTimes: number[] = [];
-        let cumulativeMs = 0;
-        for (let i = 0; i < sceneDurations.length; i++) {
-          sceneStartTimes.push(cumulativeMs);
-          cumulativeMs += sceneDurations[i];
-        }
-        const totalDuration = cumulativeMs;
-
-        const drawFrame = () => {
-            if (!isRecordingProcess) return;
-            
-            // Reset all canvas state at start of each frame
-            ctx.save();
-            ctx.shadowColor = "transparent";
-            ctx.shadowBlur = 0;
-            ctx.shadowOffsetX = 0;
-            ctx.shadowOffsetY = 0;
-            
-            ctx.fillStyle = "black";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // Calculate current scene based on elapsed time (single source of truth for sync)
-            const elapsed = Date.now() - recordingStartMs;
-            let sceneIdx = 0;
-            for (let i = 0; i < sceneStartTimes.length; i++) {
-              if (elapsed >= sceneStartTimes[i]) {
-                sceneIdx = i;
-              } else {
-                break;
-              }
-            }
-            // Clamp to valid range
-            if (sceneIdx >= scenes.length) sceneIdx = scenes.length - 1;
-
-            const scene = scenes[sceneIdx];
-            const img = loadedImages[sceneIdx];
-
-            const elapsedInScene = elapsed - sceneStartTimes[sceneIdx];
-            const sceneDur = sceneDurations[sceneIdx];
-            const progress = Math.min(1, elapsedInScene / sceneDur);
-
-            if (img && img.complete && img.naturalWidth > 0) {
-                const canvasRatio = canvas.width / canvas.height;
-                const imgRatio = img.width / img.height;
-                
-                let drawWidth, drawHeight;
-                if (canvasRatio > imgRatio) {
-                    drawWidth = canvas.width;
-                    drawHeight = canvas.width / imgRatio;
-                } else {
-                    drawHeight = canvas.height;
-                    drawWidth = canvas.height * imgRatio;
-                }
-                
-                // Apply Ken Burns zoom (15% zoom over scene duration)
-                const kbZoom = 1.0 + (progress * 0.15); 
-                const scaledWidth = drawWidth * kbZoom;
-                const scaledHeight = drawHeight * kbZoom;
-                
-                // Base offset to center the image
-                const baseOffsetX = (canvas.width - scaledWidth) / 2;
-                const baseOffsetY = (canvas.height - scaledHeight) / 2;
-                
-                // Ken Burns pan (alternating direction per scene)
-                const panDirX = currentDrawIdx % 2 === 0 ? 1 : -1;
-                const panDirY = currentDrawIdx % 3 === 0 ? 1 : -1;
-                
-                // Move from center by up to 5% of dimensions
-                const panOffsetX = (progress * (scaledWidth * 0.05)) * panDirX;
-                const panOffsetY = (progress * (scaledHeight * 0.05)) * panDirY;
-                
-                ctx.drawImage(img, baseOffsetX + panOffsetX, baseOffsetY + panOffsetY, scaledWidth, scaledHeight);
-            }
-
-            if (scene) {
-                if (scene.isThumbnail) {
-                    drawThumbnailText(ctx, canvas.width, canvas.height, scene.dialogue, storyPart, aspectRatio === '9:16');
-                } else if (subtitleStyle !== 'none') {
-                    const words = scene.dialogue.split(' ');
-                    let activeWordIndex = Math.floor((elapsedInScene / exportSceneDurationMs) * words.length);
-                    if (isNaN(activeWordIndex) || activeWordIndex < 0) activeWordIndex = 0;
-                    if (activeWordIndex >= words.length) activeWordIndex = words.length - 1;
-                    
-                    if (subtitleStyle === 'viral') {
-                        ctx.save();
-                        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
-                        ctx.fillRect(0, canvas.height - 150, canvas.width, 150);
-                        
-                        ctx.textAlign = "center";
-                        ctx.shadowColor = "black";
-                        ctx.shadowBlur = 5;
-                        
-                        const wordsPerChunk = 6;
-                        const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
-                        const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
-                        
-                        ctx.fillStyle = "#fbbf24"; 
-                        ctx.font = "bold 52px Arial";
-                        ctx.fillText(chunk, canvas.width / 2, canvas.height - 55);
-                        ctx.restore();
-                    } else if (subtitleStyle === 'cinematic') {
-                        ctx.save();
-                        ctx.textAlign = "center";
-                        ctx.shadowColor = "black";
-                        ctx.shadowBlur = 10;
-                        
-                        const wordsPerChunk = 5;
-                        const chunkIndex = Math.floor(activeWordIndex / wordsPerChunk);
-                        const chunk = words.slice(chunkIndex * wordsPerChunk, (chunkIndex + 1) * wordsPerChunk).join(' ');
-                        
-                        ctx.fillStyle = "white"; 
-                        ctx.font = "italic 44px Arial";
-                        ctx.fillText(chunk, canvas.width / 2, canvas.height - 50);
-                        ctx.restore();
-                    }
-                }
-            }
-
-            if (!isRecordingProcess) {
-              clearInterval(drawInterval);
-              ctx.restore();
-              return;
-            }
-            ctx.restore();
-            // setInterval handles the continuous loop — no rAF needed
-        };
-
-        // Use setInterval as backup to prevent browser throttling on long exports
-        const drawInterval = setInterval(() => {
-          if (!isRecordingProcess) {
-            clearInterval(drawInterval);
-            return;
-          }
-          drawFrame();
-        }, 66); // ~15fps backup via setInterval (lighter on CPU, captureStream handles actual framerate)
-
-        const processScene = async (idx: number) => {
+        // Convert blob image URL to base64
+        if (imageUrl.startsWith('blob:')) {
           try {
-            if (idx >= scenes.length) {
-                return; // drawFrame handles stopping via elapsed time
-            }
-            
-            // Update export progress
-            setExportProgress(Math.round((idx / scenes.length) * 100));
-            
-            // Play pre-fetched audio buffer at the correct AudioContext time
-            const buffer = audioBuffers[idx];
-            if (buffer) {
-                try {
-                    const source = audioCtx.createBufferSource();
-                    source.buffer = buffer;
-                    
-                    const voiceGainNode = audioCtx.createGain();
-                    voiceGainNode.gain.value = voiceVolume / 100;
-                    
-                    source.connect(voiceGainNode);
-                    voiceGainNode.connect(dest);
-                    
-                    // Schedule audio at the exact time this scene should start
-                    const sceneStartSeconds = sceneStartTimes[idx] / 1000;
-                    const audioCtxStart = audioCtx.currentTime + (sceneStartSeconds - (Date.now() - recordingStartMs) / 1000);
-                    source.start(Math.max(audioCtx.currentTime, audioCtx.currentTime));
-                } catch (err) {
-                    console.error("Audio playback error for scene", idx, err);
-                }
-            }
-            
-            console.log(`Scene ${idx}/${scenes.length}: duration=${sceneDurations[idx]}ms, audio=${buffer ? 'yes' : 'no'}`);
-            
-            // Schedule next scene's audio after this scene's duration
-            if (idx + 1 < scenes.length) {
-              setTimeout(() => processScene(idx + 1), sceneDurations[idx]);
-            }
-          } catch (err) {
-            console.error(`processScene(${idx}) error:`, err);
-            if (idx + 1 < scenes.length) {
-              setTimeout(() => processScene(idx + 1), sceneDurations[idx] || 4000);
-            }
-          }
+            const response = await fetch(imageUrl);
+            const blob = await response.blob();
+            const reader = new FileReader();
+            imageUrl = await new Promise<string>((resolve) => {
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(blob);
+            });
+          } catch { imageUrl = ''; }
+        }
+        
+        return {
+          imageUrl,
+          audioUrl,
+          dialogue: s.dialogue || '',
+          isThumbnail: s.isThumbnail || false,
         };
-
-        audioCtx.resume().then(() => {
-            recordingStartMs = Date.now();
-            const totalSec = Math.round(totalDuration/1000);
-            console.log(`Export starting: ${scenes.length} scenes, total duration: ${totalSec}s`);
-            showToast(`Exporting ${scenes.length} scenes (~${totalSec}s). Please keep this tab open.`);
-            processScene(0);
-            
-            // Stop recording after total duration (using precise timing)
-            setTimeout(() => {
-              if (isRecordingProcess) {
-                isRecordingProcess = false;
-                if (bgmSource) bgmSource.stop();
-                recorder.stop();
-                setExportProgress(100);
-              }
-            }, totalDuration + 1000);
-        });
-
-        recorder.onstop = () => {
-            const blob = new Blob(chunks, { type: options.mimeType });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            // Use correct file extension based on actual format
-            const ext = (options.mimeType || '').includes('mp4') ? 'mp4' : 'webm';
-            a.download = `AI_StoryCraft_Video.${ext}`;
-            document.body.appendChild(a);
-            a.click();
-            URL.revokeObjectURL(url);
-            audioCtx.close();
-            setIsDownloading(false);
-            showToast("Video Exported Successfully!");
-        };
-
-    } catch (e) {
-        console.error(e);
-        alert("Failed to export video.");
-        setIsDownloading(false);
+      }));
+      
+      setExportProgress(10);
+      
+      // Use AbortController with 10 minute timeout (FFmpeg needs time for many scenes)
+      const exportController = new AbortController();
+      const exportTimeout = setTimeout(() => exportController.abort(), 10 * 60 * 1000); // 10 minutes
+      
+      const response = await fetch('/api/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenes: exportScenes,
+          subtitleStyle: 'none',
+          bgmUrl: bgmTrack || undefined,
+          bgmVolume,
+          voiceVolume,
+          storyTitle: storyTitle || 'AI_StoryCraft_Video',
+          aspectRatio,
+        }),
+        signal: exportController.signal,
+      });
+      
+      clearTimeout(exportTimeout);
+      setExportProgress(90);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.details || errorData.error || 'Export failed');
+      }
+      
+      // Download the video file
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `AI_StoryCraft_${(storyTitle || 'Video').replace(/[^a-zA-Z0-9\u0900-\u097F_\- ]/g, '').trim().replace(/\s+/g, '_').slice(0, 60)}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      
+      setExportProgress(100);
+      showToast("Video exported successfully! Professional quality MP4.");
+    } catch (err: any) {
+      console.error('Export error:', err);
+      
+      // If FFmpeg not installed, show helpful message
+      if (err.message.includes('FFmpeg not installed')) {
+        showToast('FFmpeg not installed. Run: brew install ffmpeg');
+      } else {
+        showToast('Export failed: ' + err.message);
+      }
+    } finally {
+      setIsDownloading(false);
+      setExportProgress(0);
     }
   };
 
@@ -1455,9 +1129,11 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
       return;
     }
     setVideoMode(newMode);
-    // Force 16:9 for Long Video mode (YouTube requirement)
+    // Auto-set aspect ratio based on video mode
     if (newMode === 'long') {
-      setAspectRatio('16:9');
+      setAspectRatio('16:9'); // YouTube long videos = landscape
+    } else {
+      setAspectRatio('9:16'); // YouTube Shorts = portrait
     }
   };
 
@@ -1559,8 +1235,28 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                 alt="Preview" 
                 className="w-full h-full object-contain rounded-2xl shadow-2xl"
               />
+              {/* Thumbnail text overlay in modal preview */}
+              {modalIsThumbnail && (
+                <div className="absolute inset-0 rounded-2xl overflow-hidden pointer-events-none">
+                  {/* Bottom gradient */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-black/40" />
+                  {/* Part badge top-left */}
+                  <div className="absolute top-4 left-4 bg-gradient-to-r from-red-500 to-orange-500 px-4 py-1.5 rounded-full">
+                    <span className="text-white font-black text-sm">{storyPart || 'PART 1'}</span>
+                  </div>
+                  {/* Title bottom-left — use storyTitle or derive from thumbnail dialogue */}
+                  <div className="absolute bottom-6 left-6 right-6">
+                    <h2 className="text-3xl md:text-5xl font-black text-white drop-shadow-[0_4px_8px_rgba(0,0,0,1)] leading-tight" style={{ WebkitTextStroke: '2px black' }}>
+                      {storyTitle || (storyboardScenes.find(s => s.isThumbnail)?.dialogue?.replace(/,\s*Part[\s\-]*\d+/i, '').replace(/\s*-\s*.+$/, '').trim()) || ''}
+                    </h2>
+                    {partTitle && (
+                      <p className="text-lg font-bold text-amber-400 mt-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">{partTitle}</p>
+                    )}
+                  </div>
+                </div>
+              )}
               <button
-                onClick={() => setModalImage(null)}
+                onClick={() => { setModalImage(null); setModalIsThumbnail(false); }}
                 className="absolute top-3 right-3 w-10 h-10 bg-black/60 hover:bg-black/80 text-white rounded-full flex items-center justify-center transition-colors"
               >
                 <XCircle className="w-6 h-6" />
@@ -2208,7 +1904,7 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                               </label>
                               
                               {scene.imageUrl ? (
-                                 <div className="relative group/img w-full h-32 rounded-lg overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer" onClick={() => setModalImage(scene.imageUrl!)}>
+                                 <div className="relative group/img w-full h-32 rounded-lg overflow-hidden border border-slate-700 bg-slate-900 cursor-pointer" onClick={() => { setModalImage(scene.imageUrl!); setModalIsThumbnail(!!scene.isThumbnail); }}>
                                     <img 
                                        src={scene.imageUrl} 
                                        alt={`Scene ${idx + 1} Custom Image`} 
@@ -2299,8 +1995,8 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
           </div>
 
           {/* RIGHT SIDE: VIDEO PLAYER */}
-          <div className="flex flex-col justify-center">
-            <div className="w-full bg-slate-900/50 backdrop-blur-xl border border-slate-800/80 rounded-3xl relative overflow-hidden flex items-center justify-center aspect-video shadow-2xl">
+          <div className="flex flex-col justify-center items-center w-full">
+            <div className={`bg-slate-900/50 backdrop-blur-xl border border-slate-800/80 rounded-3xl relative overflow-hidden flex items-center justify-center shadow-2xl ${aspectRatio === '9:16' ? 'aspect-[9/16] h-[70vh] min-w-[280px]' : 'aspect-video w-full'}`}>
               
               <AnimatePresence mode="wait">
                 {isGeneratingVideo ? (
@@ -2375,34 +2071,22 @@ Style: Highly detailed digital painting, Pixar 3D quality, professional YouTube 
                       className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
                     >
                        {scenes[currentSceneIdx]?.isThumbnail ? (
-                         <div className={`absolute inset-0 bg-gradient-to-r from-black/95 via-black/70 to-transparent flex flex-col ${aspectRatio === '9:16' ? 'items-center bg-gradient-to-b' : 'items-start'} justify-center p-12 space-y-4`}>
-                           <div className="flex flex-col space-y-2">
-                             {scenes[currentSceneIdx]?.dialogue.replace(/, Part \d+/i, '').split(' ').filter(Boolean).reduce((acc: string[][], word: string, i: number, arr: string[]) => {
-                                if (arr.length <= 3) acc.push([word]);
-                                else if (arr.length <= 6) {
-                                  if (i % 2 === 0) acc.push([word]);
-                                  else acc[acc.length-1].push(word);
-                                } else {
-                                  if (i % 3 === 0) acc.push([word]);
-                                  else acc[acc.length-1].push(word);
-                                }
-                                return acc;
-                             }, []).map((lineWords, i) => (
-                               <h1 key={i} className={`text-6xl md:text-8xl font-black ${i % 2 !== 0 ? 'text-amber-400' : 'text-white'} drop-shadow-[0_5px_5px_rgba(0,0,0,1)] uppercase tracking-tight`} style={{ WebkitTextStroke: '3px black', lineHeight: '1.1' }}>
-                                 {lineWords.join(' ')}
-                               </h1>
-                             ))}
+                         <div className={`absolute inset-0 flex flex-col ${aspectRatio === '9:16' ? 'items-center justify-end pb-20 bg-gradient-to-t from-black/90 via-transparent to-black/40' : 'items-start justify-center bg-gradient-to-r from-black/95 via-black/70 to-transparent'} p-8 space-y-3`}>
+                           <div className={`flex flex-col ${aspectRatio === '9:16' ? 'items-center space-y-1' : 'space-y-2'}`}>
+                             <h1 className={`${aspectRatio === '9:16' ? 'text-2xl' : 'text-4xl md:text-5xl'} font-black text-white drop-shadow-[0_3px_3px_rgba(0,0,0,1)] uppercase tracking-tight text-center`} style={{ WebkitTextStroke: '1.5px black', lineHeight: '1.2' }}>
+                               {scenes[currentSceneIdx]?.dialogue.replace(/, Part \d+/i, '').replace(/\s*-\s*.+$/, '').trim()}
+                             </h1>
                            </div>
-                           <div className="bg-black px-6 py-3 rounded-xl border-4 border-amber-400 shadow-[0_5px_15px_rgba(0,0,0,0.8)] mt-6 inline-block">
-                             <span className="text-2xl md:text-3xl font-black text-amber-400">
-                               {storyPart}
-                             </span>
-                           </div>
+                           {storyPart && (
+                             <div className="bg-gradient-to-r from-red-500 to-orange-500 px-4 py-1.5 rounded-full shadow-lg">
+                               <span className="text-sm font-black text-white">{storyPart}</span>
+                             </div>
+                           )}
                          </div>
                        ) : (
-                         <div className="absolute bottom-16 left-8 right-8 text-center flex flex-col items-center">
-                           <p className="text-3xl md:text-5xl font-black text-amber-400 drop-shadow-[0_4px_4px_rgba(0,0,0,0.8)] uppercase">
-                             {isPlaying ? activeCaptionChunk : scenes[currentSceneIdx]?.dialogue}
+                         <div className="absolute bottom-20 left-4 right-4 text-center flex flex-col items-center">
+                           <p className={`${aspectRatio === '9:16' ? 'text-sm' : 'text-xl md:text-2xl'} font-bold text-amber-400 drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]`}>
+                             {isPlaying ? activeCaptionChunk : (scenes[currentSceneIdx]?.dialogue?.slice(0, 80) + (scenes[currentSceneIdx]?.dialogue?.length > 80 ? '...' : ''))}
                            </p>
                          </div>
                        )}
