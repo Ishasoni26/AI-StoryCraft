@@ -1097,9 +1097,9 @@ export default function Home() {
     } catch (err: any) {
       console.error('Export error:', err);
       
-      // If FFmpeg not installed, show helpful message
-      if (err.message.includes('FFmpeg not installed')) {
-        showToast('FFmpeg not installed. Run: brew install ffmpeg');
+      // If FFmpeg not available (e.g., Vercel/cloud), show clear message
+      if (err.message.includes('FFmpeg')) {
+        showToast('Server-side export not available on this hosting. Export works on local machine with FFmpeg installed.');
       } else {
         showToast('Export failed: ' + err.message);
       }
