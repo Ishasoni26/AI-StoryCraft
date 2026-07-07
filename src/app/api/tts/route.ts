@@ -45,7 +45,7 @@ function generateSilenceBuffer(): Buffer {
  * Returns the audio as a Buffer, or null on failure.
  */
 async function fetchTTSForChunk(text: string): Promise<Buffer | null> {
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=hi&client=tw-ob`;
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=hi&client=tw-ob&ttsspeed=1.2`;
 
   const response = await fetch(url, {
     headers: {
@@ -127,7 +127,7 @@ async function handleStandardTTS(text: string) {
   // Google TTS has a strict 200 character limit, otherwise it throws 400 Bad Request
   const safeText =
     text.length > 199 ? text.substring(0, 196) + '...' : text;
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(safeText)}&tl=hi&client=tw-ob`;
+  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(safeText)}&tl=hi&client=tw-ob&ttsspeed=1.2`;
 
   const response = await fetch(url, {
     headers: {

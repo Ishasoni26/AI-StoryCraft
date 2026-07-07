@@ -401,8 +401,7 @@ export async function POST(req: Request) {
 
     const concatenatedFile = path.join(tempDir, 'concatenated.mp4');
     await runFfmpeg(
-      `ffmpeg -f concat -safe 0 -i "${concatListFile}" -c copy -y "${concatenatedFile}"`,
-      { maxBuffer: 100 * 1024 * 1024 }
+      `ffmpeg -f concat -safe 0 -i "${concatListFile}" -c copy -y "${concatenatedFile}"`
     );
 
     console.log('[Export] All scenes concatenated');
